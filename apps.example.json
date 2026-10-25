@@ -1,0 +1,12 @@
+[
+  {
+    "name": "OrderChecker",
+    "path": "C:\\Tools\\OrderChecker\\OrderChecker-MCP.exe",
+    "startAtLogin": true
+  },
+  {
+    "name": "OrderScrapeBridge",
+    "path": "C:\\Tools\\OrderScrapeBridge\\OrderScrapeBridge.exe",
+    "startAtLogin": false
+  }
+]
