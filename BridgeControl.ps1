@@ -68,7 +68,7 @@ $form.FormBorderStyle = 'FixedSingle'
 $form.MaximizeBox = $false
 $form.StartPosition = 'CenterScreen'
 $form.AutoScaleMode = 'Dpi'
-$form.ClientSize = New-Object System.Drawing.Size(430, (30 + 50 * $apps.Count))
+$form.ClientSize = New-Object System.Drawing.Size(450, (30 + 50 * $apps.Count))
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 10)
 $iconPath = Join-Path $PSScriptRoot 'icon.ico'
 try {
@@ -91,16 +91,16 @@ for ($i = 0; $i -lt $apps.Count; $i++) {
     $name.Font = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.FontStyle]::Bold)
     $name.AutoEllipsis = $true
     $name.Location = New-Object System.Drawing.Point(42, $y)
-    $name.Size = New-Object System.Drawing.Size(150, 24)
+    $name.Size = New-Object System.Drawing.Size(170, 24)
 
     $status = New-Object System.Windows.Forms.Label
-    $status.Location = New-Object System.Drawing.Point(192, $y)
+    $status.Location = New-Object System.Drawing.Point(212, $y)
     $status.Size = New-Object System.Drawing.Size(70, 24)
 
     $start = New-Object System.Windows.Forms.Button
     $start.Text = 'Start'
     $start.Tag = $i
-    $start.Location = New-Object System.Drawing.Point(266, ($y - 4))
+    $start.Location = New-Object System.Drawing.Point(286, ($y - 4))
     $start.Size = New-Object System.Drawing.Size(72, 30)
     $start.Add_Click({
         Start-App $apps[$this.Tag]
@@ -110,7 +110,7 @@ for ($i = 0; $i -lt $apps.Count; $i++) {
     $stop = New-Object System.Windows.Forms.Button
     $stop.Text = 'Stop'
     $stop.Tag = $i
-    $stop.Location = New-Object System.Drawing.Point(346, ($y - 4))
+    $stop.Location = New-Object System.Drawing.Point(366, ($y - 4))
     $stop.Size = New-Object System.Drawing.Size(72, 30)
     $stop.Add_Click({
         Stop-App $apps[$this.Tag]
