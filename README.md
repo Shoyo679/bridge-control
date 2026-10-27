@@ -1,161 +1,232 @@
 # Bridge Control
 
-A tiny Windows control panel for programs that normally need a terminal window open all the time
-(order-checker bridges, MCP bridges, local servers, bots…).
+**Run programs that normally need a black terminal window open all the time, without the window.**
 
-Bridge Control runs them **hidden in the background** (no terminal, nothing on the taskbar) and gives you one
-small window to manage them:
+Some tools (order-checker bridges, mail bridges, bots, local servers…) only work while their terminal window stays
+open. Close the window and the program stops. Bridge Control runs them **hidden in the background** instead, and
+gives you one small window to see and control them:
 
 | | Program | Status | |
 |---|---|---|---|
 | 🟢 | OrderChecker | Online | `Start` `Stop` |
 | ⚪ | OrderScrapeBridge | Offline | `Start` `Stop` |
 
-- **Green dot** = running, **grey dot** = not running (checked every 2 seconds).
-- **Start** runs the program hidden. **Stop** closes it.
-- Lives in the tray (the hidden icons by the clock): a dot that is **green** when everything is online,
-  **amber** when some are, **grey** when none are. Click it to open the panel.
-- Closing the panel (✕) hides it to the tray. **Quit** from the tray icon's right-click menu closes Bridge Control.
-- Neither closing nor quitting stops your programs. Bridge Control is only a remote control.
-- Optional: start chosen programs automatically when you log in to Windows (Bridge Control then waits in the tray).
+- 🟢 **Green dot** = the program is running. ⚪ **Grey dot** = it is not running.
+- **Start** starts the program (hidden). **Stop** closes it.
+- Bridge Control can start your programs by itself every time you turn on your PC.
+- It sits quietly next to the clock (in the hidden icons) until you need it.
 
-No install, no admin rights, nothing to download besides this folder. It's plain PowerShell + VBScript that
-come with Windows 10 and 11.
+**What you need:** a Windows 10 or Windows 11 PC and the program(s) you want to control. Nothing else to install,
+no administrator rights, and it doesn't connect to the internet.
 
 ---
 
-## Setup guide
+## Set it up (about 5 minutes)
 
-### 1. Download
+### Step 1 – Download it
 
-1. On this page, click the green **Code** button → **Download ZIP**.
-2. Open your Downloads folder, right-click the ZIP → **Extract All…**
-3. Move the extracted folder somewhere permanent, for example:
+1. At the top of this page, click the green **`<> Code`** button, then **Download ZIP**.
+2. Open your **Downloads** folder. Right-click **bridge-control-main.zip** → **Extract All…** → **Extract**.
+3. A folder called **bridge-control-main** opens. Move it somewhere it can stay forever, for example
+   **`C:\Tools`**, and rename it to **Bridge Control** if you like.
 
-   ```
-   C:\Tools\Bridge Control
-   ```
+   > Don't leave it in Downloads: things in Downloads get deleted by accident. And try not to move it later.
 
-   Don't leave it in Downloads (it tends to get cleaned up) and avoid moving it later. If you do move it,
-   just run `Install.ps1` again.
+**Tip:** do the same for the programs you want to control. Keep each in its own folder in a place like
+`C:\Tools`, not in Downloads or on the Desktop.
 
-> Tip: put the programs you want to control somewhere permanent too, e.g. `C:\Tools\OrderChecker\`.
+### Step 2 – Run the installer once
 
-### 2. Tell it which programs to control
+1. Open the **Bridge Control** folder.
+2. Right-click **Install** (it may show as `Install.ps1`) → **Run with PowerShell**.
+3. The first time, it makes your program list and opens it in **Notepad** for you. Leave Notepad open for
+   step 3. You can close the blue window.
 
-1. In the folder, make a copy of **`apps.example.json`** and name the copy **`apps.json`**.
-   (If you skip this, step 3 does it for you and opens it in Notepad.)
-2. Open `apps.json` with Notepad (right-click → **Open with** → **Notepad**).
-3. Put in your own programs. One block per program:
+> **The blue window flashes and disappears, or says "running scripts is disabled"?**
+> In the Bridge Control folder, click the address bar at the top, type `powershell` and press **Enter**.
+> In the blue window that opens, paste this line and press **Enter**:
+>
+> ```
+> powershell -ExecutionPolicy Bypass -File .\Install.ps1
+> ```
+>
+> This only lets that one script run once. It doesn't change any Windows settings.
 
-   ```json
-   [
-     {
-       "name": "OrderChecker",
-       "path": "C:\\Tools\\OrderChecker\\OrderChecker-MCP.exe",
-       "startAtLogin": true
-     },
-     {
-       "name": "OrderScrapeBridge",
-       "path": "C:\\Tools\\OrderScrapeBridge\\OrderScrapeBridge.exe",
-       "startAtLogin": false
-     }
-   ]
-   ```
+### Step 3 – Tell it which programs to control
 
-   | Field | What it means |
-   |---|---|
-   | `name` | Any label you like; shown in the panel. |
-   | `path` | Full path to the `.exe`. **Write every `\` twice** (`C:\\Tools\\...`). |
-   | `startAtLogin` | `true` = start it hidden every time you log in to Windows. `false` = only when you press Start. |
-   | `args` *(optional)* | Command-line arguments, e.g. `"args": "--port 8080"`. |
+Notepad now shows a list like this. Each `{ … }` block is **one program**:
 
-   **Getting the path:** find the `.exe` in File Explorer, hold **Shift**, right-click it →
-   **Copy as path**, and paste it after `"path": `. It comes with quotes already; keep them and just change
-   each `\` into `\\`.
-
-   **Adding a third program:** copy a whole `{ ... }` block, put a comma between blocks, no comma after the
-   last one.
-
-4. Save the file.
-
-### 3. Install the shortcuts
-
-1. In the folder, right-click **`Install.ps1`** → **Run with PowerShell**.
-2. A blue window lists each program as **OK** (found) or **MISSING** (check that path), then:
-   - creates a **Bridge Control** shortcut on your desktop,
-   - adds a login entry if any program has `"startAtLogin": true`.
-3. Press **Enter** to close the window.
-
-If Windows says *"running scripts is disabled on this system"* or the window flashes and closes, open the
-folder, click the address bar, type `powershell` and press Enter, then run:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\Install.ps1
+```json
+[
+  {
+    "name": "OrderChecker",
+    "path": "C:\\Tools\\OrderChecker\\OrderChecker-MCP.exe",
+    "startAtLogin": true
+  },
+  {
+    "name": "OrderScrapeBridge",
+    "path": "C:\\Tools\\OrderScrapeBridge\\OrderScrapeBridge.exe",
+    "startAtLogin": false
+  }
+]
 ```
 
-This only applies to that one run; it doesn't change any Windows setting.
+Change each block to one of **your** programs:
 
-### 4. Use it
-
-- Double-click **Bridge Control** on your desktop → the panel opens.
-- Press **Start** next to a program → its dot turns green within a second or two.
-- Press **Stop** → the dot turns grey.
-- Click **✕** → the panel hides to the tray. Click the tray dot (or the desktop shortcut) to bring it back.
-- Right-click the tray dot → **Quit Bridge Control** to close it completely. Your programs keep running.
-- Programs with `startAtLogin: true` start on their own after you log in, and Bridge Control waits in the tray.
-
-> Tip: to keep the dot always visible next to the clock, drag it from the hidden icons (`^`) onto the taskbar.
-
-**Changed `apps.json`?** Quit Bridge Control from the tray and open it again. If you changed `startAtLogin`, also run
-`Install.ps1` again.
-
----
-
-## Troubleshooting
-
-| Problem | Fix |
+| Line | What to put there |
 |---|---|
-| "apps.json was not found" | Copy `apps.example.json` to `apps.json` (step 2). |
-| "apps.json could not be read" | Usually a missing comma between blocks, an extra comma after the last block, or a single `\` in a path. Paste the file into any online JSON checker to find the line. |
-| Program shows **MISSING** / "file not found" | The `path` is wrong or the `.exe` was moved. Use Shift + right-click → Copy as path again. |
-| I press Start but the dot stays grey | The program starts and then exits right away (missing login, config, licence…). Run the `.exe` normally once, in its own window, to see its error message. |
-| The program needs me to type something on start | It can't run hidden; it needs a visible window. |
-| The program opens its own normal window | Bridge Control hides console/terminal windows. Programs with a real app window might stay hidden too; use them normally instead. |
-| I closed the panel; where did it go? | It's in the tray (hidden icons, `^` by the clock). Click the dot, or double-click the desktop shortcut again. |
-| Windows shows a blue "Windows protected your PC" box for my program | That's about your program, not Bridge Control. Only run programs you trust. |
-| Program won't stop | It may need administrator rights to stop. Use Task Manager → Details → End task. |
+| `"name"` | Any name you like. It's what the panel shows. |
+| `"path"` | Where the program's `.exe` file is (see below). |
+| `"startAtLogin"` | `true` = start it by itself every time you log in to Windows.<br>`false` = only when you press Start. |
+
+**How to get the path, without typing it:**
+
+1. Find your program's `.exe` file in File Explorer.
+2. Right-click it → **Copy as path** (on Windows 10: hold **Shift** while right-clicking).
+3. In Notepad, select the old path **including its quotes** and paste over it.
+4. Now change every single `\` into two: `\\`.
+
+   ✅ Right: `"C:\\Tools\\MyBridge\\MyBridge.exe"`  ❌ Wrong: `"C:\Tools\MyBridge\MyBridge.exe"`
+
+   (This is just how this kind of file works: one `\` on its own means something else to it.)
+
+**Only one program?** Delete the second block, including the comma before it, so it ends like this:
+
+```json
+[
+  {
+    "name": "MyBridge",
+    "path": "C:\\Tools\\MyBridge\\MyBridge.exe",
+    "startAtLogin": true
+  }
+]
+```
+
+**More than two?** Copy a whole block, from `{` to `}`, and paste it after the last one. Every block needs a
+comma after its `}`, **except the last one**.
+
+When you're done, press **Ctrl + S** to save, and close Notepad.
+
+### Step 4 – Run the installer again
+
+Right-click **Install** → **Run with PowerShell** again. This time it:
+
+- checks each program: **OK** means it was found. **MISSING** means the path is wrong (go back to step 3).
+- puts a **Bridge Control** shortcut on your desktop.
+- if any program has `"startAtLogin": true`, sets Bridge Control to start when you log in.
+
+Press **Enter** to close the window. **You're done!** 🎉
 
 ---
 
-## Uninstall
+## Using it every day
 
-1. Open the panel and **Stop** anything you want stopped.
-2. Right-click **`Uninstall.ps1`** → **Run with PowerShell**. This removes the desktop shortcut and the login entry.
-3. Delete the Bridge Control folder.
-
-Your programs themselves are never touched or deleted.
-
----
-
-## How it works (for the curious)
-
-| File | Role |
+| I want to… | Do this |
 |---|---|
-| `BridgeControl.ps1` | The panel and tray icon (Windows Forms). With `-Autostart` it starts the `startAtLogin` programs and waits in the tray. Only one copy runs; opening it again shows the running one. |
-| `BridgeControl.vbs` | Launches the PowerShell script with no console window flashing up. |
-| `apps.example.json` | Example program list. Your own `apps.json` is never uploaded (it's in `.gitignore`). |
-| `Install.ps1` | Creates the desktop shortcut and the Startup-folder entry `Bridge Control (autostart)`. |
-| `Uninstall.ps1` | Removes those two shortcuts. |
+| Open Bridge Control | Double-click **Bridge Control** on your desktop, or click its dot by the clock. |
+| Start a program | Press **Start** next to it. Its dot turns green in a second or two. |
+| Stop a program | Press **Stop** next to it. Its dot turns grey. |
+| Close the window | Click **✕**. Bridge Control keeps running next to the clock. |
+| Close Bridge Control completely | Right-click its dot by the clock → **Quit Bridge Control**. |
+| Check if everything is running, without opening it | Hover over its dot by the clock. It says e.g. *"3 of 3 online"*. |
 
-- Programs are started with a hidden window (`Start-Process -WindowStyle Hidden`), in their own folder.
-- "Online" means a process with that `.exe` name (and, where Windows allows reading it, that exact path) is running.
-- The login entry is a normal shortcut in your Startup folder (`Win + R` → `shell:startup`). No services,
-  scheduled tasks or registry changes.
-- Everything runs as your own user. Nothing needs admin rights and nothing connects to the internet.
+**Closing or quitting Bridge Control never stops your programs.** It's only a remote control. To stop a
+program, press its **Stop** button.
 
-**Custom icon:** put an `icon.ico` in the folder and run `Install.ps1` again.
+### The dot next to the clock
+
+Bridge Control lives in the **hidden icons**, the little **`^`** arrow next to the clock:
+
+- 🟢 **green**: all your programs are running
+- 🟠 **orange**: some are running
+- ⚪ **grey**: none are running
+
+**Want the dot always visible?** Click the `^` arrow, then drag the dot down onto the taskbar next to the clock.
+
+### When you turn on your PC
+
+Programs set to `"startAtLogin": true` start by themselves after you log in. Bridge Control waits next to the
+clock, and no window pops up.
+
+### Changing your programs later
+
+1. Right-click the dot by the clock → **Quit Bridge Control**.
+2. In the Bridge Control folder, right-click **apps** (or `apps.json`) → **Open with** → **Notepad**.
+3. Make your changes (same rules as step 3), then save.
+4. Run **Install** again (right-click → **Run with PowerShell**).
+5. Double-click **Bridge Control** on your desktop. Your new list shows up.
+
+---
+
+## Something not working?
+
+**"apps.json could not be read"**
+There's a small mistake in your program list, usually one of these:
+- a missing comma between two blocks (`},` is needed between blocks),
+- an extra comma after the last block,
+- a path with single `\` instead of `\\`,
+- a missing quote `"`.
+
+Tip: paste the whole list into a free website like **jsonlint.com** and it shows you the exact line.
+
+**A program shows "MISSING" or "file not found"**
+The path is wrong, or the program was moved. Copy its path again (step 3).
+
+**I press Start but the dot goes back to grey**
+The program starts and then closes by itself, usually because it needs a login, a setting or a licence first.
+Run the program once the normal way (double-click its `.exe`) to read its error message, fix that, then try again.
+
+**The program needs me to type something when it starts**
+Then it can't run hidden. It needs its own window. Use it the normal way instead.
+
+**I closed the window. Where did it go?**
+It's next to the clock: click the **`^`** arrow and click the dot. Or double-click the desktop shortcut again.
+
+**I can't find the dot by the clock**
+Bridge Control isn't running. Double-click the **Bridge Control** shortcut on your desktop.
+
+**A program won't stop**
+It may need administrator rights to be stopped. Open **Task Manager** (Ctrl + Shift + Esc) → **Details** →
+find the program → **End task**.
+
+**Windows shows a blue "Windows protected your PC" box**
+That's Windows asking about your program, not about Bridge Control. Only run programs you trust.
+
+---
+
+## Remove it
+
+1. Open Bridge Control and **Stop** any programs you want stopped.
+2. Right-click its dot by the clock → **Quit Bridge Control**.
+3. In the Bridge Control folder, right-click **Uninstall** → **Run with PowerShell**. This removes the desktop
+   shortcut and stops it from starting with Windows.
+4. Delete the Bridge Control folder.
+
+Your programs are never changed or deleted.
+
+---
+
+<details>
+<summary><b>How it works (for the curious)</b></summary>
+
+| File | What it does |
+|---|---|
+| `BridgeControl.ps1` | The window and the dot by the clock. With `-Autostart` it starts the `startAtLogin` programs and waits by the clock. Only one copy runs; opening it again shows the running one. |
+| `BridgeControl.vbs` | Opens the script above without a black window flashing up. |
+| `apps.example.json` | The example program list. Your own `apps.json` stays on your PC (it is never uploaded). |
+| `Install.ps1` | Makes `apps.json` the first time, creates the desktop shortcut and the login entry. |
+| `Uninstall.ps1` | Removes the desktop shortcut and the login entry. |
+
+- Programs are started hidden (`Start-Process -WindowStyle Hidden`), from their own folder.
+- "Online" means a program with that `.exe` file is running (matched on the full path where Windows allows it).
+- The login entry is a normal shortcut in your Startup folder (`Win + R` → `shell:startup`), called
+  *Bridge Control (autostart)*. No services, scheduled tasks or registry changes.
+- An optional `"args"` line passes command-line options to a program, e.g. `"args": "--port 8080"`.
+- Put an `icon.ico` in the folder and run `Install.ps1` again to give the shortcuts your own icon.
+- Everything runs as you. Nothing needs administrator rights and nothing connects to the internet.
+
+</details>
 
 ## License
 
-MIT. Free to use, change and share. See [LICENSE](LICENSE).
+MIT: free to use, change and share. See [LICENSE](LICENSE).
