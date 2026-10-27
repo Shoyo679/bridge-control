@@ -1,6 +1,7 @@
 # Bridge Control: start / stop background programs (hidden, no console window) with a live status dot.
 #   BridgeControl.ps1              opens the panel
-#   BridgeControl.ps1 -Autostart   starts every app with "startAtLogin": true, no panel (used at Windows login)
+#   BridgeControl.ps1 -Autostart   starts every app with "startAtLogin": true, then waits in the tray (used at Windows login)
+# Closing the panel hides it to the tray; Quit in the tray icon's menu closes Bridge Control (the programs keep running).
 # The programs are listed in apps.json next to this script (copy apps.example.json to start).
 param([switch]$Autostart)
 
@@ -54,13 +55,16 @@ function Stop-App($app) {
 
 if ($Autostart) {
     foreach ($app in $apps) { if ($app.startAtLogin) { Start-App $app } }
-    exit 0
 }
 
-# Only one panel at a time.
+# Only one Bridge Control at a time. Opening it again tells the running one to show its window.
 $created = $false
 $mutex = New-Object System.Threading.Mutex($true, 'Local\BridgeControlPanel', [ref]$created)
-if (-not $created) { exit 0 }
+$showSignal = New-Object System.Threading.EventWaitHandle($false, 'AutoReset', 'Local\BridgeControlShow')
+if (-not $created) {
+    if (-not $Autostart) { [void]$showSignal.Set() }
+    exit 0
+}
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text = 'Bridge Control'
@@ -122,7 +126,71 @@ for ($i = 0; $i -lt $apps.Count; $i++) {
     $rows += @{ Dot = $dot; Status = $status; Start = $start; Stop = $stop }
 }
 
+# Tray icon: a dot that is green when everything is online, amber when some are, grey when none are.
+Add-Type -Name Native -Namespace BridgeControl -MemberDefinition '[DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr h);'
+function New-DotIcon([System.Drawing.Color]$color) {
+    $bmp = New-Object System.Drawing.Bitmap(32, 32)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.SmoothingMode = 'AntiAlias'
+    $g.FillEllipse((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)), 2, 2, 28, 28)
+    $g.FillEllipse((New-Object System.Drawing.SolidBrush($color)), 5, 5, 22, 22)
+    $g.Dispose()
+    $icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
+    $bmp.Dispose()
+    return $icon
+}
+$trayIcons = @{
+    all  = New-DotIcon ([System.Drawing.Color]::FromArgb(34, 197, 94))
+    some = New-DotIcon ([System.Drawing.Color]::FromArgb(245, 158, 11))
+    none = New-DotIcon ([System.Drawing.Color]::FromArgb(148, 163, 184))
+}
+
+$quitting = $false
+$hintShown = $false
+
+function Show-Panel {
+    $form.Show()
+    if ($form.WindowState -eq 'Minimized') { $form.WindowState = 'Normal' }
+    $form.Activate()
+    Update-Rows
+}
+
+function Exit-BridgeControl {
+    $script:quitting = $true
+    $tray.Visible = $false
+    $form.Close()
+    $context.ExitThread()
+}
+
+$menu = New-Object System.Windows.Forms.ContextMenuStrip
+$openItem = $menu.Items.Add('Open Bridge Control')
+$openItem.Font = New-Object System.Drawing.Font($openItem.Font, [System.Drawing.FontStyle]::Bold)
+$openItem.Add_Click({ Show-Panel })
+[void]$menu.Items.Add('-')
+$quitItem = $menu.Items.Add('Quit Bridge Control')
+$quitItem.Add_Click({ Exit-BridgeControl })
+
+$tray = New-Object System.Windows.Forms.NotifyIcon
+$tray.Icon = $trayIcons.none
+$tray.Text = 'Bridge Control'
+$tray.ContextMenuStrip = $menu
+$tray.Add_MouseClick({ if ($_.Button -eq 'Left') { Show-Panel } })
+$tray.Visible = $true
+
+# The X hides the panel to the tray; only Quit really closes it.
+$form.Add_FormClosing({
+    # Let Windows shut down / sign out without being held up.
+    if ($script:quitting -or $_.CloseReason -in 'WindowsShutDown', 'TaskManagerClosing') { return }
+    $_.Cancel = $true
+    $form.Hide()
+    if (-not $script:hintShown) {
+        $script:hintShown = $true
+        $tray.ShowBalloonTip(3000, 'Bridge Control is still here', 'Click this icon to open it. Right-click > Quit to close it. Your programs keep running either way.', 'Info')
+    }
+})
+
 function Update-Rows {
+    $online = 0
     for ($i = 0; $i -lt $apps.Count; $i++) {
         $on = Test-Running $apps[$i]
         $r = $rows[$i]
@@ -130,7 +198,11 @@ function Update-Rows {
         $r.Status.Text = if ($on) { 'Online' } else { 'Offline' }
         $r.Start.Enabled = -not $on
         $r.Stop.Enabled = $on
+        if ($on) { $online++ }
     }
+    $tray.Icon = if ($online -eq $apps.Count) { $trayIcons.all } elseif ($online -gt 0) { $trayIcons.some } else { $trayIcons.none }
+    $tip = "Bridge Control - $online of $($apps.Count) online"
+    $tray.Text = $tip.Substring(0, [Math]::Min(63, $tip.Length))
 }
 
 $timer = New-Object System.Windows.Forms.Timer
@@ -138,7 +210,19 @@ $timer.Interval = 2000
 $timer.Add_Tick({ Update-Rows })
 $timer.Start()
 
+# Another launch asked us to show the panel.
+$signalTimer = New-Object System.Windows.Forms.Timer
+$signalTimer.Interval = 300
+$signalTimer.Add_Tick({ if ($showSignal.WaitOne(0)) { Show-Panel } })
+$signalTimer.Start()
+
 Update-Rows
-[void]$form.ShowDialog()
-$timer.Stop()
+$context = New-Object System.Windows.Forms.ApplicationContext
+# At login it waits in the tray; opened by hand it shows the panel.
+if (-not $Autostart) { Show-Panel }
+[System.Windows.Forms.Application]::Run($context)
+
+$timer.Stop(); $signalTimer.Stop()
+$tray.Dispose()
+foreach ($icon in $trayIcons.Values) { [void][BridgeControl.Native]::DestroyIcon($icon.Handle) }
 $mutex.ReleaseMutex()

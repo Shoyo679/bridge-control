@@ -13,8 +13,11 @@ small window to manage them:
 
 - **Green dot** = running, **grey dot** = not running (checked every 2 seconds).
 - **Start** runs the program hidden. **Stop** closes it.
-- Optional: start chosen programs automatically when you log in to Windows.
-- Closing the panel does **not** stop your programs. It's only a remote control.
+- Lives in the tray (the hidden icons by the clock): a dot that is **green** when everything is online,
+  **amber** when some are, **grey** when none are. Click it to open the panel.
+- Closing the panel (✕) hides it to the tray. **Quit** from the tray icon's right-click menu closes Bridge Control.
+- Neither closing nor quitting stops your programs. Bridge Control is only a remote control.
+- Optional: start chosen programs automatically when you log in to Windows (Bridge Control then waits in the tray).
 
 No install, no admin rights, nothing to download besides this folder. It's plain PowerShell + VBScript that
 come with Windows 10 and 11.
@@ -98,9 +101,13 @@ This only applies to that one run; it doesn't change any Windows setting.
 - Double-click **Bridge Control** on your desktop → the panel opens.
 - Press **Start** next to a program → its dot turns green within a second or two.
 - Press **Stop** → the dot turns grey.
-- Programs with `startAtLogin: true` start on their own after you log in. Open the panel any time to check them.
+- Click **✕** → the panel hides to the tray. Click the tray dot (or the desktop shortcut) to bring it back.
+- Right-click the tray dot → **Quit Bridge Control** to close it completely. Your programs keep running.
+- Programs with `startAtLogin: true` start on their own after you log in, and Bridge Control waits in the tray.
 
-**Changed `apps.json`?** Close the panel and open it again. If you changed `startAtLogin`, also run
+> Tip: to keep the dot always visible next to the clock, drag it from the hidden icons (`^`) onto the taskbar.
+
+**Changed `apps.json`?** Quit Bridge Control from the tray and open it again. If you changed `startAtLogin`, also run
 `Install.ps1` again.
 
 ---
@@ -115,7 +122,7 @@ This only applies to that one run; it doesn't change any Windows setting.
 | I press Start but the dot stays grey | The program starts and then exits right away (missing login, config, licence…). Run the `.exe` normally once, in its own window, to see its error message. |
 | The program needs me to type something on start | It can't run hidden; it needs a visible window. |
 | The program opens its own normal window | Bridge Control hides console/terminal windows. Programs with a real app window might stay hidden too; use them normally instead. |
-| Nothing happens when I double-click the shortcut | The panel may already be open behind other windows (only one can be open). Check the taskbar for "Bridge Control". |
+| I closed the panel; where did it go? | It's in the tray (hidden icons, `^` by the clock). Click the dot, or double-click the desktop shortcut again. |
 | Windows shows a blue "Windows protected your PC" box for my program | That's about your program, not Bridge Control. Only run programs you trust. |
 | Program won't stop | It may need administrator rights to stop. Use Task Manager → Details → End task. |
 
@@ -135,7 +142,7 @@ Your programs themselves are never touched or deleted.
 
 | File | Role |
 |---|---|
-| `BridgeControl.ps1` | The panel (Windows Forms). With `-Autostart` it just starts the `startAtLogin` programs and exits. |
+| `BridgeControl.ps1` | The panel and tray icon (Windows Forms). With `-Autostart` it starts the `startAtLogin` programs and waits in the tray. Only one copy runs; opening it again shows the running one. |
 | `BridgeControl.vbs` | Launches the PowerShell script with no console window flashing up. |
 | `apps.example.json` | Example program list. Your own `apps.json` is never uploaded (it's in `.gitignore`). |
 | `Install.ps1` | Creates the desktop shortcut and the Startup-folder entry `Bridge Control (autostart)`. |
