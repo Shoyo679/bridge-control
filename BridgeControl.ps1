@@ -3,6 +3,9 @@
 #   BridgeControl.ps1 -Autostart   starts every app with "startAtLogin": true, then waits in the tray (used at Windows login)
 # Closing the panel hides it to the tray; Quit in the tray icon's menu closes Bridge Control (the programs keep running).
 # The programs are listed in apps.json next to this script (copy apps.example.json to start).
+# Apps with "keepRunning": true are watched while Bridge Control runs: started again (hidden) if they stop by
+# themselves, and swapped for a hidden copy if a copy Bridge Control didn't start shows up (e.g. after a self-update
+# that came back in a terminal window). Stop turns this off until Start is pressed. Events go to bridge-control.log.
 param([switch]$Autostart)
 
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
@@ -38,23 +41,47 @@ function Get-AppProcess($app) {
 }
 function Test-Running($app) { [bool](Get-AppProcess $app) }
 
-function Start-App($app) {
+$logPath = Join-Path $PSScriptRoot 'bridge-control.log'
+function Write-Log($text) {
+    try {
+        if ((Test-Path $logPath) -and (Get-Item $logPath).Length -gt 256KB) { Move-Item $logPath "$logPath.old" -Force }
+        Add-Content $logPath "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  $text"
+    } catch {}
+}
+
+# The copies Bridge Control started, as "id:start time" (so a reused process id never counts). Kept in state.json
+# so they are still recognised after Bridge Control itself is closed and opened again.
+$statePath = Join-Path $PSScriptRoot 'state.json'
+function Get-ProcessKey($proc) {
+    $start = try { $proc.StartTime.ToFileTimeUtc() } catch { 0 }
+    "$($proc.Id):$start"
+}
+function Test-Owned($proc) { $owned.ContainsKey((Get-ProcessKey $proc)) }
+function Save-Owned {
+    foreach ($key in @($owned.Keys)) {
+        $p = Get-Process -Id ([int]($key -split ':')[0]) -ErrorAction SilentlyContinue
+        if (-not $p -or (Get-ProcessKey $p) -ne $key) { $owned.Remove($key) }
+    }
+    try { ConvertTo-Json -InputObject @($owned.Keys) | Set-Content $statePath } catch {}
+}
+$owned = @{}
+try { foreach ($key in @(Get-Content $statePath -Raw -ErrorAction Stop | ConvertFrom-Json | ForEach-Object { $_ })) { $owned["$key"] = $true } } catch {}
+Save-Owned
+
+function Start-App($app, [switch]$Quiet) {
     if (Test-Running $app) { return }
     if (-not (Test-Path $app.path)) {
-        if (-not $Autostart) { Show-Error "$($app.name): file not found:`n$($app.path)" }
+        if (-not $Quiet) { Show-Error "$($app.name): file not found:`n$($app.path)" }
         return
     }
-    $startArgs = @{ FilePath = $app.path; WorkingDirectory = (Split-Path $app.path); WindowStyle = 'Hidden' }
+    $startArgs = @{ FilePath = $app.path; WorkingDirectory = (Split-Path $app.path); WindowStyle = 'Hidden'; PassThru = $true }
     if ($app.args) { $startArgs.ArgumentList = $app.args }
-    Start-Process @startArgs
+    $proc = Start-Process @startArgs
+    if ($proc) { $owned[(Get-ProcessKey $proc)] = $true; Save-Owned }
 }
 
 function Stop-App($app) {
     Get-AppProcess $app | Stop-Process -Force -ErrorAction SilentlyContinue
-}
-
-if ($Autostart) {
-    foreach ($app in $apps) { if ($app.startAtLogin) { Start-App $app } }
 }
 
 # Only one Bridge Control at a time. Opening it again tells the running one to show its window.
@@ -64,6 +91,58 @@ $showSignal = New-Object System.Threading.EventWaitHandle($false, 'AutoReset', '
 if (-not $created) {
     if (-not $Autostart) { [void]$showSignal.Set() }
     exit 0
+}
+
+# keepRunning: wait this long before acting, so a program that is updating itself can finish. After each automatic
+# restart the wait doubles (up to 5 minutes), so a program that keeps failing isn't restarted over and over; it goes
+# back to the start once the program has run calmly for 5 minutes.
+$restartDelay = 10     # seconds a stopped program stays stopped before it is started again
+$takeoverDelay = 20    # seconds a copy Bridge Control didn't start may run before it is swapped for a hidden one
+$guard = @(foreach ($app in $apps) { @{ Wanted = $false; Since = $null; Wait = $restartDelay; CalmSince = $null } })
+
+for ($i = 0; $i -lt $apps.Count; $i++) {
+    $loginStart = $Autostart -and $apps[$i].startAtLogin
+    if ($loginStart) { Start-App $apps[$i] -Quiet }
+    # Watch what should be running: what was started at login and whatever is already running.
+    $guard[$i].Wanted = $loginStart -or (Test-Running $apps[$i])
+}
+
+function Watch-Apps {
+    $now = Get-Date
+    for ($i = 0; $i -lt $apps.Count; $i++) {
+        $app = $apps[$i]; $g = $guard[$i]
+        if (-not $app.keepRunning -or -not $g.Wanted) { continue }
+        $procs = @(Get-AppProcess $app)
+        $foreign = @($procs | Where-Object { -not (Test-Owned $_) })
+        if ($procs.Count -gt 0 -and $foreign.Count -eq 0) {
+            $g.Since = $null
+            if (-not $g.CalmSince) { $g.CalmSince = $now }
+            elseif (($now - $g.CalmSince).TotalMinutes -ge 5) { $g.Wait = $restartDelay }
+            continue
+        }
+        $g.CalmSince = $null
+        if (-not $g.Since) { $g.Since = $now; continue }
+        $limit = if ($procs.Count -eq 0) { $g.Wait } else { [Math]::Max($takeoverDelay, $g.Wait) }
+        if (($now - $g.Since).TotalSeconds -lt $limit) { continue }
+
+        if ($procs.Count -eq 0) {
+            Write-Log "$($app.name) had stopped by itself; starting it again (hidden)."
+        } else {
+            $foreign | Stop-Process -Force -ErrorAction SilentlyContinue
+            Wait-Process -Id $foreign.Id -Timeout 5 -ErrorAction SilentlyContinue
+            if (@(Get-AppProcess $app | Where-Object { -not (Test-Owned $_) }).Count -gt 0) {
+                Write-Log "$($app.name) is running in a copy Bridge Control didn't start, and it could not be closed (it may need administrator rights)."
+            } elseif ($procs.Count -gt $foreign.Count) {
+                Write-Log "$($app.name): closed an extra copy that Bridge Control didn't start; the hidden one keeps running."
+            } else {
+                Write-Log "$($app.name) was running in a copy Bridge Control didn't start (often after it updated itself); swapped it for a hidden one."
+            }
+        }
+        Start-App $app -Quiet
+        if (-not (Test-Path $app.path)) { Write-Log "$($app.name): file not found: $($app.path)" }
+        $g.Since = $null
+        $g.Wait = [Math]::Min(2 * $g.Wait, 300)
+    }
 }
 
 $form = New-Object System.Windows.Forms.Form
@@ -107,6 +186,8 @@ for ($i = 0; $i -lt $apps.Count; $i++) {
     $start.Location = New-Object System.Drawing.Point(286, ($y - 4))
     $start.Size = New-Object System.Drawing.Size(72, 30)
     $start.Add_Click({
+        $g = $guard[$this.Tag]
+        $g.Wanted = $true; $g.Since = $null; $g.Wait = $restartDelay
         Start-App $apps[$this.Tag]
         Update-Rows
     })
@@ -117,6 +198,7 @@ for ($i = 0; $i -lt $apps.Count; $i++) {
     $stop.Location = New-Object System.Drawing.Point(366, ($y - 4))
     $stop.Size = New-Object System.Drawing.Size(72, 30)
     $stop.Add_Click({
+        $guard[$this.Tag].Wanted = $false
         Stop-App $apps[$this.Tag]
         Start-Sleep -Milliseconds 300
         Update-Rows
@@ -193,9 +275,11 @@ function Update-Rows {
     $online = 0
     for ($i = 0; $i -lt $apps.Count; $i++) {
         $on = Test-Running $apps[$i]
+        # A watched program that is down will be started again shortly.
+        $coming = -not $on -and $apps[$i].keepRunning -and $guard[$i].Wanted
         $r = $rows[$i]
-        $r.Dot.ForeColor = if ($on) { [System.Drawing.Color]::LimeGreen } else { [System.Drawing.Color]::Gray }
-        $r.Status.Text = if ($on) { 'Online' } else { 'Offline' }
+        $r.Dot.ForeColor = if ($on) { [System.Drawing.Color]::LimeGreen } elseif ($coming) { [System.Drawing.Color]::Orange } else { [System.Drawing.Color]::Gray }
+        $r.Status.Text = if ($on) { 'Online' } elseif ($coming) { 'Starting...' } else { 'Offline' }
         $r.Start.Enabled = -not $on
         $r.Stop.Enabled = $on
         if ($on) { $online++ }
@@ -207,7 +291,7 @@ function Update-Rows {
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 2000
-$timer.Add_Tick({ Update-Rows })
+$timer.Add_Tick({ Watch-Apps; Update-Rows })
 $timer.Start()
 
 # Another launch asked us to show the panel.

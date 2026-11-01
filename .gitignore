@@ -1,2 +1,6 @@
 # Each person's own program list
 apps.json
+# What Bridge Control writes while it runs
+state.json
+bridge-control.log
+bridge-control.log.old

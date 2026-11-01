@@ -14,6 +14,8 @@ gives you one small window to see and control them:
 - 🟢 **Green dot** = the program is running. ⚪ **Grey dot** = it is not running.
 - **Start** starts the program (hidden). **Stop** closes it.
 - Bridge Control can start your programs by itself every time you turn on your PC.
+- It can also **keep them running**: if one closes by itself, or updates itself and comes back in a black window,
+  Bridge Control starts it again, hidden.
 - It sits quietly next to the clock (in the hidden icons) until you need it.
 
 **What you need:** a Windows 10 or Windows 11 PC and the program(s) you want to control. Nothing else to install,
@@ -61,12 +63,14 @@ Notepad now shows a list like this. Each `{ … }` block is **one program**:
   {
     "name": "OrderChecker",
     "path": "C:\\Tools\\OrderChecker\\OrderChecker-MCP.exe",
-    "startAtLogin": true
+    "startAtLogin": true,
+    "keepRunning": true
   },
   {
     "name": "OrderScrapeBridge",
     "path": "C:\\Tools\\OrderScrapeBridge\\OrderScrapeBridge.exe",
-    "startAtLogin": false
+    "startAtLogin": false,
+    "keepRunning": false
   }
 ]
 ```
@@ -78,6 +82,9 @@ Change each block to one of **your** programs:
 | `"name"` | Any name you like. It's what the panel shows. |
 | `"path"` | Where the program's `.exe` file is (see below). |
 | `"startAtLogin"` | `true` = start it by itself every time you log in to Windows.<br>`false` = only when you press Start. |
+| `"keepRunning"` | `true` = if it closes by itself, start it again (hidden). Good for programs that update themselves. See [Keep running](#keep-running).<br>`false` = leave it closed. |
+
+Watch the commas: every line inside a block ends with a comma, **except the last one** before the `}`.
 
 **How to get the path, without typing it:**
 
@@ -97,7 +104,8 @@ Change each block to one of **your** programs:
   {
     "name": "MyBridge",
     "path": "C:\\Tools\\MyBridge\\MyBridge.exe",
-    "startAtLogin": true
+    "startAtLogin": true,
+    "keepRunning": true
   }
 ]
 ```
@@ -148,6 +156,26 @@ Bridge Control lives in the **hidden icons**, the little **`^`** arrow next to t
 Programs set to `"startAtLogin": true` start by themselves after you log in. Bridge Control waits next to the
 clock, and no window pops up.
 
+### Keep running
+
+Some programs update themselves. After an update they often restart **in a normal black window**, and if you close
+that window, the program stops. With `"keepRunning": true`, Bridge Control looks after the program while Bridge
+Control is running:
+
+- **It closed by itself** (an update, a crash, its window was closed): about 10 seconds later Bridge Control starts
+  it again, hidden. Meanwhile its dot is 🟠 orange and says *Starting...*.
+- **It came back in a black window** (a copy Bridge Control didn't start): Bridge Control gives it about 20 seconds to
+  finish updating, then closes that window and starts the program again, hidden. The program is offline for a
+  second or two while it swaps.
+- **You pressed Stop**: it stays stopped. Bridge Control won't start it again until you press **Start**.
+- If a program keeps closing, Bridge Control waits longer each time (up to 5 minutes), so it doesn't restart it
+  over and over.
+
+Every restart is written down in **bridge-control.log** in the Bridge Control folder, with the time and the reason.
+
+> Don't use `keepRunning` for a program you sometimes start by hand in its own window on purpose. Bridge Control
+> would swap it for a hidden one.
+
 ### Changing your programs later
 
 1. Right-click the dot by the clock → **Quit Bridge Control**.
@@ -175,6 +203,11 @@ The path is wrong, or the program was moved. Copy its path again (step 3).
 **I press Start but the dot goes back to grey**
 The program starts and then closes by itself, usually because it needs a login, a setting or a licence first.
 Run the program once the normal way (double-click its `.exe`) to read its error message, fix that, then try again.
+
+**A black window for my program popped up by itself (often after the program updated)**
+Don't close it if you want the program to keep working. Set `"keepRunning": true` for that program (see
+[Changing your programs later](#changing-your-programs-later)) and Bridge Control will swap that window for a hidden
+copy by itself from then on.
 
 **The program needs me to type something when it starts**
 Then it can't run hidden. It needs its own window. Use it the normal way instead.
@@ -216,6 +249,8 @@ Your programs are never changed or deleted.
 | `apps.example.json` | The example program list. Your own `apps.json` stays on your PC (it is never uploaded). |
 | `Install.ps1` | Makes `apps.json` the first time, creates the desktop shortcut and the login entry. |
 | `Uninstall.ps1` | Removes the desktop shortcut and the login entry. |
+| `state.json` | Made while it runs: which running copies Bridge Control started itself (process id + start time), so `keepRunning` can tell them apart from copies it didn't start. |
+| `bridge-control.log` | Made while it runs: every automatic restart, with the time and the reason. |
 
 - Programs are started hidden (`Start-Process -WindowStyle Hidden`), from their own folder.
 - "Online" means a program with that `.exe` file is running (matched on the full path where Windows allows it).

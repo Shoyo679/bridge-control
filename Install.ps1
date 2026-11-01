@@ -30,7 +30,8 @@ try {
 }
 
 foreach ($app in $apps) {
-    if (Test-Path $app.path) { Write-Host "  OK       $($app.name)" -ForegroundColor Green }
+    $kept = if ($app.keepRunning) { '  (kept running)' } else { '' }
+    if (Test-Path $app.path) { Write-Host "  OK       $($app.name)$kept" -ForegroundColor Green }
     else { Write-Host "  MISSING  $($app.name): $($app.path)" -ForegroundColor Red }
 }
 

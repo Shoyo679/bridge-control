@@ -2,11 +2,13 @@
   {
     "name": "OrderChecker",
     "path": "C:\\Tools\\OrderChecker\\OrderChecker-MCP.exe",
-    "startAtLogin": true
+    "startAtLogin": true,
+    "keepRunning": true
   },
   {
     "name": "OrderScrapeBridge",
     "path": "C:\\Tools\\OrderScrapeBridge\\OrderScrapeBridge.exe",
-    "startAtLogin": false
+    "startAtLogin": false,
+    "keepRunning": false
   }
 ]
