@@ -44,11 +44,30 @@ if ($apps.Count -eq 0) {
     exit 1
 }
 
+# Looking a program up by name makes Windows list every process (~15 ms each time), so all lookups share one list of
+# the processes with our programs' names, taken at most once a second and again right after a Start or Stop.
+$appNames = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+foreach ($app in $apps) { [void]$appNames.Add([IO.Path]::GetFileNameWithoutExtension($app.path)) }
+$snapshot = @{ At = [DateTime]::MinValue; ByName = @{} }
+function Get-Snapshot {
+    if (((Get-Date) - $snapshot.At).TotalMilliseconds -gt 1000) {
+        $byName = @{}
+        foreach ($p in [Diagnostics.Process]::GetProcesses()) {
+            if ($appNames.Contains($p.ProcessName)) {
+                if ($byName.ContainsKey($p.ProcessName)) { $byName[$p.ProcessName] += $p } else { $byName[$p.ProcessName] = @($p) }
+            }
+        }
+        $snapshot.ByName = $byName; $snapshot.At = Get-Date
+    }
+    $snapshot.ByName
+}
+function Reset-Snapshot { $snapshot.At = [DateTime]::MinValue }
+
 function Get-AppProcess($app) {
     $procName = [IO.Path]::GetFileNameWithoutExtension($app.path)
     # Match on the full path when Windows lets us read it, so a different program with the same name is not mistaken for it.
-    Get-Process -Name $procName -ErrorAction SilentlyContinue |
-        Where-Object { -not $_.Path -or $_.Path -ieq $app.path }
+    $list = (Get-Snapshot)[$procName]
+    if ($list) { $list | Where-Object { -not $_.Path -or $_.Path -ieq $app.path } }
 }
 function Test-Running($app) { [bool](Get-AppProcess $app) }
 
@@ -69,10 +88,11 @@ function Get-ProcessKey($proc) {
 }
 function Test-Owned($proc) { $owned.ContainsKey((Get-ProcessKey $proc)) }
 function Save-Owned {
-    foreach ($key in @($owned.Keys)) {
-        $p = Get-Process -Id ([int]($key -split ':')[0]) -ErrorAction SilentlyContinue
-        if (-not $p -or (Get-ProcessKey $p) -ne $key) { $owned.Remove($key) }
-    }
+    # Our copies always have one of our programs' names, so the fresh list is enough to see which still run.
+    Reset-Snapshot
+    $live = @{}
+    foreach ($list in (Get-Snapshot).Values) { foreach ($p in $list) { $live[(Get-ProcessKey $p)] = $true } }
+    foreach ($key in @($owned.Keys)) { if (-not $live.ContainsKey($key)) { $owned.Remove($key) } }
     try { ConvertTo-Json -InputObject @($owned.Keys) | Set-Content $statePath } catch {}
 }
 $owned = @{}
@@ -92,7 +112,11 @@ function Start-App($app, [switch]$Quiet) {
 }
 
 function Stop-App($app) {
-    Get-AppProcess $app | Stop-Process -Force -ErrorAction SilentlyContinue
+    $procs = @(Get-AppProcess $app)
+    $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+    # Wait only until they have really closed (usually a few ms), so the card shows Offline straight away.
+    foreach ($p in $procs) { try { [void]$p.WaitForExit(1000) } catch {} }
+    Reset-Snapshot
 }
 
 # Only one Bridge Control at a time. Opening it again tells the running one to show its window.
@@ -141,6 +165,7 @@ function Watch-Apps {
         } else {
             $foreign | Stop-Process -Force -ErrorAction SilentlyContinue
             Wait-Process -Id $foreign.Id -Timeout 5 -ErrorAction SilentlyContinue
+            Reset-Snapshot
             if (@(Get-AppProcess $app | Where-Object { -not (Test-Owned $_) }).Count -gt 0) {
                 Write-Log "$($app.name) is running in a copy Bridge Control didn't start, and it could not be closed (it may need administrator rights)."
             } elseif ($procs.Count -gt $foreign.Count) {
@@ -164,7 +189,6 @@ function Invoke-Start($i) {
 function Invoke-Stop($i) {
     $guard[$i].Wanted = $false
     Stop-App $apps[$i]
-    Start-Sleep -Milliseconds 300
 }
 
 # ---- The panel: a dark card per program with its logo, its status and one Start / Stop button. ----
@@ -249,7 +273,8 @@ function Get-Detail($v) {
         'on'  { if ($v.Up) { 'up ' + (Format-Span ($now - $v.Up)) } else { '' } }
         'off' { 'not running' }
         'wait' {
-            if (-not $v.Until) { 'shortly' }
+            if ($v.Line -in 'Starting', 'Stopping') { '' }
+            elseif (-not $v.Until) { 'shortly' }
             else {
                 $left = [int][Math]::Ceiling(($v.Until - $now).TotalSeconds)
                 $when = if ($left -gt 0) { "in ${left}s" } else { 'now' }
@@ -277,10 +302,11 @@ try {
 # Dark title bar to match (Windows 10 20H1 and later; older versions just keep the light one).
 $form.Add_HandleCreated({ $on = 1; [void][BridgeControl.Native]::DwmSetWindowAttribute($form.Handle, 20, [ref]$on, 4) })
 
-$form.Add_Paint({
-    $g = $_.Graphics
-    $g.SmoothingMode = 'AntiAlias'; $g.TextRenderingHint = 'ClearTypeGridFit'; $g.InterpolationMode = 'HighQualityBicubic'
-    $g.ScaleTransform($k, $k)
+# Everything that only changes with a status or the mouse (cards, logos, names, buttons) is drawn once into a picture;
+# each frame (10 a second) then only adds the breathing dots and the timers on top.
+$static = @{ Key = $null; Bitmap = $null }
+function Set-Quality($g) { $g.SmoothingMode = 'AntiAlias'; $g.TextRenderingHint = 'ClearTypeGridFit'; $g.InterpolationMode = 'HighQualityBicubic' }
+function Draw-Static($g) {
     $W = $layout.width
 
     # Header: title, how many are online, Start all.
@@ -292,38 +318,22 @@ $form.Add_Paint({
     $g.FillPath($(if ($anyOff -and "$hover" -eq 'all') { $brushes.buttonHover } else { $brushes.button }), $pill); $g.DrawPath($buttonPen, $pill)
     $g.DrawString('Start all', $fonts.button, $(if ($anyOff) { $brushes.text } else { $brushes.faint }), $startAllRect, $centered)
 
-    # The online dots breathe slowly (2.4 s).
-    $pulse = 0.5 + 0.5 * [Math]::Sin($clock.Elapsed.TotalSeconds * 2 * [Math]::PI / 2.4)
-
     for ($i = 0; $i -lt $apps.Count; $i++) {
         $v = $view[$i]; $y = Get-CardY $i
-        $color = $theme[$v.State]; $off = $v.State -eq 'off'
+        $off = $v.State -eq 'off'
         $card = New-RoundRect 14 $y ($W - 28) $layout.cardHeight 10
         $g.FillPath($brushes.card, $card); $g.DrawPath($edgePen, $card)
         $g.SetClip($card); $g.FillRectangle($brushes[$v.State], 14, $y, 3, $layout.cardHeight); $g.ResetClip()
 
-        # Logo, dimmed when off, with the status dot on its corner.
+        # Logo, dimmed when off (its status dot is drawn each frame).
         $lx = 30; $ly = $y + 13
         $g.DrawImage($logos[$i], $lx, $ly, $layout.logo, $layout.logo)
         if ($off) { $g.FillPath($brushes.dim, (New-RoundRect $lx $ly $layout.logo $layout.logo 9)) }
-        $dx = $lx + 33; $dy = $ly + 33
-        if (-not $off) {
-            $glow = New-Object System.Drawing.Drawing2D.GraphicsPath; $glow.AddEllipse(($dx - 10), ($dy - 10), 20, 20)
-            $glowBrush = New-Object System.Drawing.Drawing2D.PathGradientBrush($glow)
-            $glowBrush.CenterColor = [System.Drawing.Color]::FromArgb([int](70 + 110 * $pulse), $color)
-            $glowBrush.SurroundColors = @([System.Drawing.Color]::FromArgb(0, $color))
-            $g.FillPath($glowBrush, $glow); $glowBrush.Dispose(); $glow.Dispose()
-        }
-        $g.FillEllipse($brushes.card, ($dx - 6), ($dy - 6), 12, 12); $g.FillEllipse($brushes[$v.State], ($dx - 4), ($dy - 4), 8, 8)
 
-        # Name, then status in its colour followed by the detail.
+        # Name, then status in its colour; the detail after it is drawn each frame at DetailX.
         $g.DrawString($apps[$i].name, $fonts.name, $(if ($off) { $brushes.muted } else { $brushes.text }), (New-Object System.Drawing.RectangleF(82, ($y + 12), 282, 22)), $nameFormat)
         $g.DrawString($v.Line, $fonts.text, $brushes[$v.State], 83, ($y + 37))
-        $detail = Get-Detail $v
-        if ($detail) {
-            $lineWidth = $g.MeasureString($v.Line, $fonts.text, (New-Object System.Drawing.PointF(0, 0)), [System.Drawing.StringFormat]::GenericTypographic).Width
-            $g.DrawString("$dot  $detail", $fonts.text, $brushes.faint, (89 + $lineWidth), ($y + 37))
-        }
+        $v.DetailX = 89 + $g.MeasureString($v.Line, $fonts.text, (New-Object System.Drawing.PointF(0, 0)), [System.Drawing.StringFormat]::GenericTypographic).Width
 
         # One button: green Start when off, Stop otherwise.
         $b = Get-ButtonRect $i
@@ -335,6 +345,41 @@ $form.Add_Paint({
             $g.FillPath($(if ("$hover" -eq "$i") { $brushes.buttonHover } else { $brushes.button }), $shape); $g.DrawPath($buttonPen, $shape)
             $g.DrawString('Stop', $fonts.button, $brushes.text, $b, $centered)
         }
+    }
+}
+
+$form.Add_Paint({
+    $g = $_.Graphics
+    $key = (@($view | ForEach-Object { "$($_.State)|$($_.Line)" }) -join ';') + "|$hover"
+    if ($static.Key -ne $key -or -not $static.Bitmap) {
+        if ($static.Bitmap) { $static.Bitmap.Dispose() }
+        $bmp = New-Object System.Drawing.Bitmap($form.ClientSize.Width, $form.ClientSize.Height)
+        $sg = [System.Drawing.Graphics]::FromImage($bmp)
+        $sg.Clear($theme.bg); Set-Quality $sg; $sg.ScaleTransform($k, $k)
+        Draw-Static $sg
+        $sg.Dispose()
+        $static.Bitmap = $bmp; $static.Key = $key
+    }
+    $g.DrawImageUnscaled($static.Bitmap, 0, 0)
+
+    Set-Quality $g
+    $g.ScaleTransform($k, $k)
+    # The status dots breathe slowly (2.4 s); the detail (uptime / countdown) changes by the second.
+    $pulse = 0.5 + 0.5 * [Math]::Sin($clock.Elapsed.TotalSeconds * 2 * [Math]::PI / 2.4)
+    for ($i = 0; $i -lt $apps.Count; $i++) {
+        $v = $view[$i]; $y = Get-CardY $i
+        $color = $theme[$v.State]
+        $dx = 63; $dy = $y + 46
+        if ($v.State -ne 'off') {
+            $glow = New-Object System.Drawing.Drawing2D.GraphicsPath; $glow.AddEllipse(($dx - 10), ($dy - 10), 20, 20)
+            $glowBrush = New-Object System.Drawing.Drawing2D.PathGradientBrush($glow)
+            $glowBrush.CenterColor = [System.Drawing.Color]::FromArgb([int](70 + 110 * $pulse), $color)
+            $glowBrush.SurroundColors = @([System.Drawing.Color]::FromArgb(0, $color))
+            $g.FillPath($glowBrush, $glow); $glowBrush.Dispose(); $glow.Dispose()
+        }
+        $g.FillEllipse($brushes.card, ($dx - 6), ($dy - 6), 12, 12); $g.FillEllipse($brushes[$v.State], ($dx - 4), ($dy - 4), 8, 8)
+        $detail = Get-Detail $v
+        if ($detail) { $g.DrawString("$dot  $detail", $fonts.text, $brushes.faint, $v.DetailX, ($y + 37)) }
     }
 })
 
@@ -361,11 +406,16 @@ $form.Add_MouseUp({
     $target = Get-HitTarget $_
     $wasPressed = $script:pressed; $script:pressed = $null
     if ($null -eq $target -or "$target" -ne "$wasPressed") { return }
-    if ("$target" -eq 'all') {
-        for ($i = 0; $i -lt $apps.Count; $i++) { if ($view[$i].State -eq 'off') { Invoke-Start $i } }
-    } elseif ($null -ne $target) {
-        if ($view[$target].State -eq 'off') { Invoke-Start $target } else { Invoke-Stop $target }
-    } else { return }
+    # Start all starts every program that is off; a row's button starts it when off and stops it otherwise.
+    $rowsHit = if ("$target" -eq 'all') { @(0..($apps.Count - 1) | Where-Object { $view[$_].State -eq 'off' }) } else { @($target) }
+    $starting = @{}; foreach ($i in $rowsHit) { $starting[$i] = $view[$i].State -eq 'off' }
+    # Show the change at once; starting a program can take a moment (Windows checks it first).
+    foreach ($i in $rowsHit) {
+        $view[$i].Line = if ($starting[$i]) { 'Starting' } else { 'Stopping' }
+        $view[$i].State = 'wait'; $view[$i].Until = $null
+    }
+    $form.Refresh()
+    foreach ($i in $rowsHit) { if ($starting[$i]) { Invoke-Start $i } else { Invoke-Stop $i } }
     Update-Rows
 })
 
