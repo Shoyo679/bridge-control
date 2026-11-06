@@ -16,7 +16,9 @@ gives you one small window to see and control them:
 
 - Each program gets a dark card with **its own logo**, a status dot and one button.
 - 🟢 **Green** = running (and for how long). 🟠 **Orange** = being started again. ⚪ **Grey** = not running.
-- **Start** starts the program (hidden). **Stop** closes it. **Start all** starts every program that isn't running.
+- **Start** starts the program (hidden). **Stop** closes it.
+- The button at the top says **Start all** (starts every program that isn't running) and turns into **Stop all**
+  once every program is online.
 - Bridge Control can start your programs by itself every time you turn on your PC.
 - It can also **keep them running**: if one closes by itself, or updates itself and comes back in a black window,
   Bridge Control starts it again, hidden.
@@ -139,6 +141,7 @@ Press **Enter** to close the window. **You're done!** 🎉
 | Open Bridge Control | Double-click **Bridge Control** on your desktop, or click its icon by the clock. |
 | Start a program | Press **Start** next to it. Its dot turns green in a second or two. |
 | Stop a program | Press **Stop** next to it. Its dot turns grey. |
+| Start or stop everything | Press **Start all** at the top. When everything is online it says **Stop all**. |
 | Close the window | Click **✕**. Bridge Control keeps running next to the clock. |
 | Close Bridge Control completely | Right-click its icon by the clock → **Quit Bridge Control**. |
 | Check if everything is running, without opening it | Hover over its icon by the clock. It says e.g. *"3 of 3 online"*. |

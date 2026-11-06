@@ -313,10 +313,12 @@ function Draw-Static($g) {
     $online = @($view | Where-Object { $_.State -eq 'on' }).Count
     $g.DrawString('Bridges', $fonts.title, $brushes.text, 17, 12)
     $g.DrawString("$online of $($apps.Count) online  $dot  watching since $($watchingSince.ToString('h:mm tt'))", $fonts.text, $brushes.muted, 19, 44)
-    $anyOff = @($view | Where-Object { $_.State -eq 'off' }).Count -gt 0
+    # Stop all when every program is online, otherwise Start all (greyed when nothing is off).
+    $allOn = $online -eq $apps.Count
+    $usable = $allOn -or @($view | Where-Object { $_.State -eq 'off' }).Count -gt 0
     $pill = New-RoundRect $startAllRect.X $startAllRect.Y $startAllRect.Width $startAllRect.Height 13
-    $g.FillPath($(if ($anyOff -and "$hover" -eq 'all') { $brushes.buttonHover } else { $brushes.button }), $pill); $g.DrawPath($buttonPen, $pill)
-    $g.DrawString('Start all', $fonts.button, $(if ($anyOff) { $brushes.text } else { $brushes.faint }), $startAllRect, $centered)
+    $g.FillPath($(if ($usable -and "$hover" -eq 'all') { $brushes.buttonHover } else { $brushes.button }), $pill); $g.DrawPath($buttonPen, $pill)
+    $g.DrawString($(if ($allOn) { 'Stop all' } else { 'Start all' }), $fonts.button, $(if ($usable) { $brushes.text } else { $brushes.faint }), $startAllRect, $centered)
 
     for ($i = 0; $i -lt $apps.Count; $i++) {
         $v = $view[$i]; $y = Get-CardY $i
@@ -406,8 +408,12 @@ $form.Add_MouseUp({
     $target = Get-HitTarget $_
     $wasPressed = $script:pressed; $script:pressed = $null
     if ($null -eq $target -or "$target" -ne "$wasPressed") { return }
-    # Start all starts every program that is off; a row's button starts it when off and stops it otherwise.
-    $rowsHit = if ("$target" -eq 'all') { @(0..($apps.Count - 1) | Where-Object { $view[$_].State -eq 'off' }) } else { @($target) }
+    # Stop all (every program online) stops them all; Start all starts every program that is off; a row's button
+    # starts it when off and stops it otherwise.
+    $allRows = @(0..($apps.Count - 1))
+    $rowsHit = if ("$target" -ne 'all') { @($target) }
+               elseif (@($allRows | Where-Object { $view[$_].State -ne 'on' }).Count -eq 0) { $allRows }
+               else { @($allRows | Where-Object { $view[$_].State -eq 'off' }) }
     $starting = @{}; foreach ($i in $rowsHit) { $starting[$i] = $view[$i].State -eq 'off' }
     # Show the change at once; starting a program can take a moment (Windows checks it first).
     foreach ($i in $rowsHit) {
