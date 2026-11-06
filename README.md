@@ -1,3 +1,5 @@
+<img src="logo.png" alt="Bridge Control logo" width="96" align="right">
+
 # Bridge Control
 
 **Run programs that normally need a black terminal window open all the time, without the window.**
@@ -261,7 +263,8 @@ Your programs are never changed or deleted.
 - The login entry is a normal shortcut in your Startup folder (`Win + R` → `shell:startup`), called
   *Bridge Control (autostart)*. No services, scheduled tasks or registry changes.
 - An optional `"args"` line passes command-line options to a program, e.g. `"args": "--port 8080"`.
-- Put an `icon.ico` in the folder and run `Install.ps1` again to give the shortcuts your own icon.
+- `icon.ico` (and `logo.png` for this page) is Bridge Control's logo: four status dots. Replace `icon.ico` with your
+  own and run `Install.ps1` again to change the window and shortcut icon.
 - Everything runs as you. Nothing needs administrator rights and nothing connects to the internet.
 
 </details>
