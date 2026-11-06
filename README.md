@@ -136,25 +136,29 @@ Press **Enter** to close the window. **You're done!** 🎉
 
 | I want to… | Do this |
 |---|---|
-| Open Bridge Control | Double-click **Bridge Control** on your desktop, or click its dot by the clock. |
+| Open Bridge Control | Double-click **Bridge Control** on your desktop, or click its icon by the clock. |
 | Start a program | Press **Start** next to it. Its dot turns green in a second or two. |
 | Stop a program | Press **Stop** next to it. Its dot turns grey. |
 | Close the window | Click **✕**. Bridge Control keeps running next to the clock. |
-| Close Bridge Control completely | Right-click its dot by the clock → **Quit Bridge Control**. |
-| Check if everything is running, without opening it | Hover over its dot by the clock. It says e.g. *"3 of 3 online"*. |
+| Close Bridge Control completely | Right-click its icon by the clock → **Quit Bridge Control**. |
+| Check if everything is running, without opening it | Hover over its icon by the clock. It says e.g. *"3 of 3 online"*. |
 
 **Closing or quitting Bridge Control never stops your programs.** It's only a remote control. To stop a
 program, press its **Stop** button.
 
-### The dot next to the clock
+### The icon next to the clock
 
-Bridge Control lives in the **hidden icons**, the little **`^`** arrow next to the clock:
+Bridge Control lives in the **hidden icons**, the little **`^`** arrow next to the clock. Its icon is the logo's four
+dots, and **each dot is one of your programs**, in the order of your list (left to right, then the next row):
 
-- 🟢 **green**: all your programs are running
-- 🟠 **orange**: some are running
-- ⚪ **grey**: none are running
+- 🟢 **green**: that program is running
+- 🟠 **orange**: it is being started again
+- ⚪ **grey**: it is not running
+- a faint dot: you have fewer than four programs
 
-**Want the dot always visible?** Click the `^` arrow, then drag the dot down onto the taskbar next to the clock.
+With more than four programs, the dots show the mix instead (e.g. three green and one grey = about a quarter is off).
+
+**Want the icon always visible?** Click the `^` arrow, then drag the icon down onto the taskbar next to the clock.
 
 ### When you turn on your PC
 
@@ -183,7 +187,7 @@ Every restart is written down in **bridge-control.log** in the Bridge Control fo
 
 ### Changing your programs later
 
-1. Right-click the dot by the clock → **Quit Bridge Control**.
+1. Right-click the icon by the clock → **Quit Bridge Control**.
 2. In the Bridge Control folder, right-click **apps** (or `apps.json`) → **Open with** → **Notepad**.
 3. Make your changes (same rules as step 3), then save.
 4. Run **Install** again (right-click → **Run with PowerShell**).
@@ -218,9 +222,10 @@ copy by itself from then on.
 Then it can't run hidden. It needs its own window. Use it the normal way instead.
 
 **I closed the window. Where did it go?**
-It's next to the clock: click the **`^`** arrow and click the dot. Or double-click the desktop shortcut again.
+It's next to the clock: click the **`^`** arrow and click the four-dot icon. Or double-click the desktop shortcut
+again.
 
-**I can't find the dot by the clock**
+**I can't find the icon by the clock**
 Bridge Control isn't running. Double-click the **Bridge Control** shortcut on your desktop.
 
 **A program won't stop**
@@ -235,7 +240,7 @@ That's Windows asking about your program, not about Bridge Control. Only run pro
 ## Remove it
 
 1. Open Bridge Control and **Stop** any programs you want stopped.
-2. Right-click its dot by the clock → **Quit Bridge Control**.
+2. Right-click its icon by the clock → **Quit Bridge Control**.
 3. In the Bridge Control folder, right-click **Uninstall** → **Run with PowerShell**. This removes the desktop
    shortcut and stops it from starting with Windows.
 4. Delete the Bridge Control folder.
@@ -249,7 +254,7 @@ Your programs are never changed or deleted.
 
 | File | What it does |
 |---|---|
-| `BridgeControl.ps1` | The window and the dot by the clock. With `-Autostart` it starts the `startAtLogin` programs and waits by the clock. Only one copy runs; opening it again shows the running one. |
+| `BridgeControl.ps1` | The window and the icon by the clock. With `-Autostart` it starts the `startAtLogin` programs and waits by the clock. Only one copy runs; opening it again shows the running one. |
 | `BridgeControl.vbs` | Opens the script above without a black window flashing up. |
 | `apps.example.json` | The example program list. Your own `apps.json` stays on your PC (it is never uploaded). |
 | `Install.ps1` | Makes `apps.json` the first time, creates the desktop shortcut and the login entry. |

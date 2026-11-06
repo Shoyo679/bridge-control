@@ -14,9 +14,12 @@ Add-Type -Name Native -Namespace BridgeControl -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
 [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern uint PrivateExtractIcons(string file, int index, int cx, int cy, IntPtr[] icons, uint[] ids, uint count, uint flags);
 [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+[DllImport("shell32.dll", CharSet = CharSet.Unicode)] public static extern int SetCurrentProcessExplicitAppUserModelID(string id);
 '@
 # Draw at the screen's real resolution instead of being stretched (blurry) by Windows.
 [void][BridgeControl.Native]::SetProcessDPIAware()
+# Its own taskbar identity, so the taskbar shows Bridge Control's icon instead of grouping it with PowerShell.
+[void][BridgeControl.Native]::SetCurrentProcessExplicitAppUserModelID('BridgeControl.Panel')
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 $configPath = Join-Path $PSScriptRoot 'apps.json'
@@ -366,22 +369,33 @@ $form.Add_MouseUp({
     Update-Rows
 })
 
-# Tray icon: a dot that is green when everything is online, amber when some are, grey when none are.
-function New-DotIcon([System.Drawing.Color]$color) {
-    $bmp = New-Object System.Drawing.Bitmap(32, 32)
-    $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.SmoothingMode = 'AntiAlias'
-    $g.FillEllipse((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)), 2, 2, 28, 28)
-    $g.FillEllipse((New-Object System.Drawing.SolidBrush($color)), 5, 5, 22, 22)
-    $g.Dispose()
-    $icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
-    $bmp.Dispose()
-    return $icon
-}
-$trayIcons = @{
-    all  = New-DotIcon ([System.Drawing.Color]::FromArgb(34, 197, 94))
-    some = New-DotIcon ([System.Drawing.Color]::FromArgb(245, 158, 11))
-    none = New-DotIcon ([System.Drawing.Color]::FromArgb(148, 163, 184))
+# Tray icon: the logo's four dots, each showing one program (green online, amber restarting, grey off; an unused
+# dot is faint). With more than four programs the dots show the share of each state instead. Made once per mix.
+$trayIcons = @{}
+function Get-TrayIcon([string[]]$states) {
+    $slots = if ($states.Count -le 4) { @($states) + @('empty') * (4 - $states.Count) }
+             else { $sorted = @($states | Sort-Object { @('on', 'wait', 'off').IndexOf($_) }); @(0..3 | ForEach-Object { $sorted[[int][Math]::Floor($_ * $sorted.Count / 4)] }) }
+    $key = $slots -join ','
+    if (-not $trayIcons.ContainsKey($key)) {
+        $s = [System.Windows.Forms.SystemInformation]::SmallIconSize.Width
+        $bmp = New-Object System.Drawing.Bitmap($s, $s)
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        $g.SmoothingMode = 'AntiAlias'; $g.PixelOffsetMode = 'HighQuality'
+        $tile = New-RoundRect ($s * 0.04) ($s * 0.04) ($s * 0.92) ($s * 0.92) ($s * 0.22)
+        $g.FillPath((New-Object System.Drawing.Drawing2D.LinearGradientBrush((New-Object System.Drawing.PointF(0, 0)), (New-Object System.Drawing.PointF(0, $s)), (Get-Color '#20242E'), (Get-Color '#101217'))), $tile)
+        $g.DrawPath((New-Object System.Drawing.Pen((Get-Color '#2E3442'), 1)), $tile)
+        # Dots a little bigger than in the logo, so they read at tray size.
+        $r = $s * 0.14; $gap = $s * 0.31
+        for ($i = 0; $i -lt 4; $i++) {
+            $color = if ($slots[$i] -eq 'empty') { Get-Color '#2A303C' } else { $theme[$slots[$i]] }
+            $cx = $s / 2 + (($i % 2) - 0.5) * $gap; $cy = $s / 2 + ([Math]::Floor($i / 2) - 0.5) * $gap
+            $g.FillEllipse((New-Object System.Drawing.SolidBrush($color)), ($cx - $r), ($cy - $r), (2 * $r), (2 * $r))
+        }
+        $g.Dispose()
+        $trayIcons[$key] = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
+        $bmp.Dispose()
+    }
+    $trayIcons[$key]
 }
 
 $quitting = $false
@@ -410,7 +424,7 @@ $quitItem = $menu.Items.Add('Quit Bridge Control')
 $quitItem.Add_Click({ Exit-BridgeControl })
 
 $tray = New-Object System.Windows.Forms.NotifyIcon
-$tray.Icon = $trayIcons.none
+$tray.Icon = Get-TrayIcon @($view | ForEach-Object { $_.State })
 $tray.Text = 'Bridge Control'
 $tray.ContextMenuStrip = $menu
 $tray.Add_MouseClick({ if ($_.Button -eq 'Left') { Show-Panel } })
@@ -449,7 +463,7 @@ function Update-Rows {
         } else { $v.State = 'off'; $v.Line = 'Offline' }
     }
     if ($form.Visible) { $form.Invalidate() }
-    $tray.Icon = if ($online -eq $apps.Count) { $trayIcons.all } elseif ($online -gt 0) { $trayIcons.some } else { $trayIcons.none }
+    $tray.Icon = Get-TrayIcon @($view | ForEach-Object { $_.State })
     $tip = "Bridge Control - $online of $($apps.Count) online"
     $tray.Text = $tip.Substring(0, [Math]::Min(63, $tip.Length))
 }
