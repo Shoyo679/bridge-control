@@ -190,6 +190,7 @@ for ($i = 0; $i -lt $apps.Count; $i++) {
         $g.Wanted = $true; $g.Since = $null; $g.Wait = $restartDelay
         Start-App $apps[$this.Tag]
         Update-Rows
+        $form.ActiveControl = $null   # the clicked button is now disabled; don't pass the focus box to the next one
     })
 
     $stop = New-Object System.Windows.Forms.Button
@@ -202,6 +203,7 @@ for ($i = 0; $i -lt $apps.Count; $i++) {
         Stop-App $apps[$this.Tag]
         Start-Sleep -Milliseconds 300
         Update-Rows
+        $form.ActiveControl = $null
     })
 
     $form.Controls.AddRange(@($dot, $name, $status, $start, $stop))
@@ -234,6 +236,7 @@ function Show-Panel {
     $form.Show()
     if ($form.WindowState -eq 'Minimized') { $form.WindowState = 'Normal' }
     $form.Activate()
+    $form.ActiveControl = $null   # no button starts with the blue focus box
     Update-Rows
 }
 
