@@ -4,3 +4,5 @@ apps.json
 state.json
 bridge-control.log
 bridge-control.log.old
+# Your own logo pictures (other companies' logos stay off GitHub)
+icons/

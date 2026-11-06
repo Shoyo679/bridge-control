@@ -8,11 +8,13 @@ gives you one small window to see and control them:
 
 | | Program | Status | |
 |---|---|---|---|
-| 🟢 | OrderChecker | Online | `Start` `Stop` |
-| ⚪ | OrderScrapeBridge | Offline | `Start` `Stop` |
+| 🟢 | OrderChecker | Online · up 5h 12m | `Stop` |
+| 🟠 | OrderScrapeBridge | Restarting · back in 8s | `Stop` |
+| ⚪ | Order Tracker | Offline · not running | `Start` |
 
-- 🟢 **Green dot** = the program is running. ⚪ **Grey dot** = it is not running.
-- **Start** starts the program (hidden). **Stop** closes it.
+- Each program gets a dark card with **its own logo**, a status dot and one button.
+- 🟢 **Green** = running (and for how long). 🟠 **Orange** = being started again. ⚪ **Grey** = not running.
+- **Start** starts the program (hidden). **Stop** closes it. **Start all** starts every program that isn't running.
 - Bridge Control can start your programs by itself every time you turn on your PC.
 - It can also **keep them running**: if one closes by itself, or updates itself and comes back in a black window,
   Bridge Control starts it again, hidden.
@@ -82,6 +84,7 @@ Change each block to one of **your** programs:
 | `"name"` | Any name you like. It's what the panel shows. |
 | `"path"` | Where the program's `.exe` file is (see below). |
 | `"startAtLogin"` | `true` = start it by itself every time you log in to Windows.<br>`false` = only when you press Start. |
+| `"icon"` *(optional)* | A picture to show as the program's logo, e.g. `"icons\\mybridge.png"` (a path inside the Bridge Control folder, or a full path). Without it, the program's own icon is used. |
 | `"keepRunning"` | `true` = if it closes by itself, start it again (hidden). Good for programs that update themselves. See [Keep running](#keep-running).<br>`false` = leave it closed. |
 
 Watch the commas: every line inside a block ends with a comma, **except the last one** before the `}`.
@@ -163,10 +166,10 @@ that window, the program stops. With `"keepRunning": true`, Bridge Control looks
 Control is running:
 
 - **It closed by itself** (an update, a crash, its window was closed): about 10 seconds later Bridge Control starts
-  it again, hidden. Meanwhile its dot is 🟠 orange and says *Starting...*.
+  it again, hidden. Meanwhile its dot is 🟠 orange and says *Restarting · back in 8s*.
 - **It came back in a black window** (a copy Bridge Control didn't start): Bridge Control gives it about 20 seconds to
-  finish updating, then closes that window and starts the program again, hidden. The program is offline for a
-  second or two while it swaps.
+  finish updating, then closes that window and starts the program again, hidden. Meanwhile it says *Switching to
+  hidden*. The program is offline for a second or two while it swaps.
 - **You pressed Stop**: it stays stopped. Bridge Control won't start it again until you press **Start**.
 - If a program keeps closing, Bridge Control waits longer each time (up to 5 minutes), so it doesn't restart it
   over and over.
@@ -249,6 +252,7 @@ Your programs are never changed or deleted.
 | `apps.example.json` | The example program list. Your own `apps.json` stays on your PC (it is never uploaded). |
 | `Install.ps1` | Makes `apps.json` the first time, creates the desktop shortcut and the login entry. |
 | `Uninstall.ps1` | Removes the desktop shortcut and the login entry. |
+| `icons\` | Optional: your own logo pictures for the `"icon"` line. Stays on your PC (it is never uploaded), so logos of other companies' programs don't end up online. |
 | `state.json` | Made while it runs: which running copies Bridge Control started itself (process id + start time), so `keepRunning` can tell them apart from copies it didn't start. |
 | `bridge-control.log` | Made while it runs: every automatic restart, with the time and the reason. |
 
