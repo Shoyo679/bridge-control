@@ -109,32 +109,23 @@ function Save-Owned {
     foreach ($key in @($owned.Keys)) { if (-not $live.ContainsKey($key)) { $owned.Remove($key) } }
     try { ConvertTo-Json -InputObject @($owned.Keys) | Set-Content $statePath } catch {}
 }
+# Quicker than Save-Owned for the panel's Start: just adds the new copy (Save-Owned also drops ended ones).
+function Add-Owned($key) {
+    $owned[$key] = $true
+    try { [IO.File]::WriteAllText($statePath, '["' + (@($owned.Keys) -join '","') + '"]') } catch {}
+}
 $owned = @{}
 try { foreach ($key in @(Get-Content $statePath -Raw -ErrorAction Stop | ConvertFrom-Json | ForEach-Object { $_ })) { $owned["$key"] = $true } } catch {}
 Save-Owned
 
-# A service is asked with its own command; Windows shows its administrator prompt. Returns $false if it wasn't run
-# (prompt cancelled, file missing).
-function Invoke-Service($app, $command) {
-    Resolve-AppPath $app
-    try {
-        Start-Process -FilePath $app.path -ArgumentList $command -Verb RunAs -WindowStyle Hidden -ErrorAction Stop
-        Write-Log "$($app.name): asked it to $command."
-        $true
-    } catch {
-        Write-Log "$($app.name): '$command' was not run ($($_.Exception.Message))."
-        $false
-    }
-    Reset-Snapshot
-}
 function Read-ServiceStatus($app) {
     if (-not $app.service.statusFile) { return $null }
     try { Get-Content $app.service.statusFile -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $null }
 }
 
+# Used at login and by keepRunning (the panel's buttons work in the background, see Invoke-InBackground).
 function Start-App($app, [switch]$Quiet) {
     if (Test-Running $app) { return }
-    if ($app.service) { return (Invoke-Service $app $(if ($app.service.start) { $app.service.start } else { 'start' })) }
     if (-not (Test-Path $app.path)) {
         if (-not $Quiet) { Show-Error "$($app.name): file not found:`n$($app.path)" }
         return
@@ -145,13 +136,47 @@ function Start-App($app, [switch]$Quiet) {
     if ($proc) { $owned[(Get-ProcessKey $proc)] = $true; Save-Owned }
 }
 
-function Stop-App($app) {
-    if ($app.service) { return (Invoke-Service $app $(if ($app.service.stop) { $app.service.stop } else { 'stop' })) }
-    $procs = @(Get-AppProcess $app)
-    $procs | Stop-Process -Force -ErrorAction SilentlyContinue
-    # Wait only until they have really closed (usually a few ms), so the card shows Offline straight away.
-    foreach ($p in $procs) { try { [void]$p.WaitForExit(1000) } catch {} }
-    Reset-Snapshot
+# The panel's Start / Stop run in the background, so the window keeps animating while Windows starts a program
+# (0.1-0.5 s) or while a service's administrator prompt is open. Complete-Jobs picks up the results.
+$jobScripts = @{
+    # Same as Start-Process -WindowStyle Hidden; hands back "id:start time" so the copy is known as ours.
+    start = { param($path, $arguments)
+        $psi = New-Object Diagnostics.ProcessStartInfo($path)
+        $psi.WorkingDirectory = [IO.Path]::GetDirectoryName($path); $psi.WindowStyle = 'Hidden'; $psi.UseShellExecute = $true
+        if ($arguments) { $psi.Arguments = $arguments }
+        $p = [Diagnostics.Process]::Start($psi)
+        if ($p) { "$($p.Id):$($p.StartTime.ToFileTimeUtc())" } }
+    # Waits until each one has really closed (usually a few ms).
+    stop = { param($ids)
+        foreach ($id in $ids) { try { $p = [Diagnostics.Process]::GetProcessById($id); $p.Kill(); [void]$p.WaitForExit(2000) } catch {} } }
+    # A service's own command, with Windows' administrator prompt.
+    service = { param($path, $command)
+        try { Start-Process -FilePath $path -ArgumentList $command -Verb RunAs -WindowStyle Hidden -ErrorAction Stop; 'ok' }
+        catch { "not run ($($_.Exception.Message))" } }
+}
+$jobs = New-Object System.Collections.ArrayList
+function Invoke-InBackground($row, $kind, [object[]]$arguments) {
+    $ps = [PowerShell]::Create(); $ps.RunspacePool = $pool
+    [void]$ps.AddScript($jobScripts[$kind]); foreach ($a in $arguments) { [void]$ps.AddArgument($a) }
+    [void]$jobs.Add(@{ PS = $ps; Handle = $ps.BeginInvoke(); Row = $row; Kind = $kind; Command = $arguments[-1] })
+}
+function Complete-Jobs {
+    $done = $false
+    for ($j = $jobs.Count - 1; $j -ge 0; $j--) {
+        $job = $jobs[$j]
+        if (-not $job.Handle.IsCompleted) { continue }
+        $out = try { @($job.PS.EndInvoke($job.Handle)) } catch { @() }
+        $job.PS.Dispose(); $jobs.RemoveAt($j); $done = $true
+        $app = $apps[$job.Row]
+        switch ($job.Kind) {
+            'start' { if ($out.Count -and $out[-1]) { Add-Owned "$($out[-1])" } }
+            'service' {
+                if ("$($out[-1])" -eq 'ok') { Write-Log "$($app.name): asked it to $($job.Command)." }
+                else { Write-Log "$($app.name): '$($job.Command)' was $($out[-1])."; $view[$job.Row].PendingUntil = $null }   # prompt cancelled: nothing will change
+            }
+        }
+    }
+    if ($done) { Reset-Snapshot; Update-Rows }
 }
 
 # Only one Bridge Control at a time. Opening it again tells the running one to show its window.
@@ -162,6 +187,8 @@ if (-not $created) {
     if (-not $Autostart) { [void]$showSignal.Set() }
     exit 0
 }
+# Two background workers for the panel's Start / Stop (see Invoke-InBackground).
+$pool = [RunspaceFactory]::CreateRunspacePool(1, 2); $pool.Open()
 
 # keepRunning: wait this long before acting, so a program that is updating itself can finish. After each automatic
 # restart the wait doubles (up to 5 minutes), so a program that keeps failing isn't restarted over and over; it goes
@@ -217,15 +244,21 @@ function Watch-Apps {
     }
 }
 
-# Both return $false when nothing was done (only a service can say so: its prompt was cancelled).
-function Invoke-Start($i) {
-    $g = $guard[$i]
-    $g.Wanted = $true; $g.Since = $null; $g.Wait = $restartDelay
-    Start-App $apps[$i]
-}
-function Invoke-Stop($i) {
-    $guard[$i].Wanted = $false
-    Stop-App $apps[$i]
+# A power button / Start all / Stop all: Start sets keepRunning's watch again, Stop pauses it until the next Start.
+# Returns $false when nothing could be started (file not found).
+function Request-Change($i, [bool]$start) {
+    $app = $apps[$i]; $g = $guard[$i]
+    if ($start) { $g.Wanted = $true; $g.Since = $null; $g.Wait = $restartDelay } else { $g.Wanted = $false }
+    if ($app.service) {
+        Resolve-AppPath $app
+        $command = if ($start) { if ($app.service.start) { $app.service.start } else { 'start' } } else { if ($app.service.stop) { $app.service.stop } else { 'stop' } }
+        Invoke-InBackground $i 'service' @($app.path, $command)
+    } elseif ($start) {
+        if (-not (Test-Path $app.path)) { Show-Error "$($app.name): file not found:`n$($app.path)"; return $false }
+        Invoke-InBackground $i 'start' @($app.path, $app.args)
+    } else {
+        Invoke-InBackground $i 'stop' @(, @(Get-AppProcess $app | ForEach-Object { $_.Id }))
+    }
 }
 
 # ---- The panel: a grid of tiles on deep blue, one per program: logo, status, uptime, the last hour and a power button. ----
@@ -257,6 +290,7 @@ $pens = @{ edge = New-Object System.Drawing.Pen($theme.edge); edgeOn = New-Objec
 $nameFormat = New-Object System.Drawing.StringFormat; $nameFormat.Trimming = 'EllipsisCharacter'; $nameFormat.FormatFlags = 'NoWrap'
 $centered = New-Object System.Drawing.StringFormat; $centered.Alignment = 'Center'; $centered.LineAlignment = 'Center'
 $typo = [System.Drawing.StringFormat]::GenericTypographic
+$stripBrushes = @{ on = New-Object System.Drawing.SolidBrush((Get-Color '#22D3EE' 210)); onDim = New-Object System.Drawing.SolidBrush((Get-Color '#22D3EE' 70)); wait = New-Object System.Drawing.SolidBrush((Get-Color '#FBBF24' 230)) }
 
 $layout = @{ width = 520; top = 104; tileW = 231; tileH = 206; gap = 14; logo = 56; power = 21; strip = 40 }
 $rowCount = [Math]::Ceiling($apps.Count / 2)
@@ -278,8 +312,14 @@ function Fill-Glow($g, [float]$cx, [float]$cy, [float]$r, $color, [int]$alpha) {
     $g.FillPath($b, $p); $b.Dispose(); $p.Dispose()
 }
 # Small capitals with letter spacing (GDI+ has none of its own).
+# (Letter widths are measured once per font and letter.)
+$letterWidths = @{}
 function Draw-Spaced($g, [string]$text, $font, $brush, [float]$x, [float]$y, [float]$track) {
-    foreach ($ch in $text.ToCharArray()) { $s = [string]$ch; $g.DrawString($s, $font, $brush, $x, $y, $typo); $x += $g.MeasureString($s, $font, 1000, $typo).Width + $track; if ($s -eq ' ') { $x += $font.Size * 0.3 } }
+    foreach ($ch in $text.ToCharArray()) {
+        $s = [string]$ch; $key = "$($font.Name)|$($font.Size)|$s"
+        if (-not $letterWidths.ContainsKey($key)) { $letterWidths[$key] = $g.MeasureString($s, $font, 1000, $typo).Width + $(if ($s -eq ' ') { $font.Size * 0.3 } else { 0 }) }
+        $g.DrawString($s, $font, $brush, $x, $y, $typo); $x += $letterWidths[$key] + $track
+    }
     $x
 }
 
@@ -320,10 +360,24 @@ $logos = @(foreach ($app in $apps) { Get-Logo $app })
 # What each tile shows; filled in by Update-Rows. The value (uptime / countdown) is worked out when drawing.
 #   Until/Total: countdown end and length; Pending*: a click is waiting for the program to actually change;
 #   History: one letter per 90 s for the last hour (1 running, 2 restarting, 0 off); StoppedAt: when it was seen stopping.
-$view = @(foreach ($app in $apps) { @{ State = 'off'; Line = 'Stopped'; Until = $null; Total = 0; Up = $null; Update = $false; PendingUntil = $null; PendingTarget = $null; History = ''; StoppedAt = $null } })
+#   FadeFrom/FadeAt: the power button's colour when the state last changed, blended into the new one over 0.35 s.
+$view = @(foreach ($app in $apps) { @{ State = 'off'; Line = 'Stopped'; Until = $null; Total = 0; Up = $null; Update = $false; PendingUntil = $null; PendingTarget = $null; History = ''; StoppedAt = $null; FadeFrom = $null; FadeAt = $null } })
 $historyStep = 90; $lastSample = [DateTime]::MinValue
 $hover = $null           # 'all' or a tile number while the mouse is over a button
 $clock = [Diagnostics.Stopwatch]::StartNew()
+
+$fadeTime = 0.35
+# The power button's colour now: its state's colour, or on its way there after a change (eased out).
+function Get-PowerColor($v, [double]$t) {
+    $to = switch ($v.State) { 'on' { $theme.on } 'wait' { $theme.wait } default { $theme.ringOff } }
+    if ($null -eq $v.FadeAt -or ($t - $v.FadeAt) -ge $fadeTime) { return $to }
+    $f = 1.0 - [Math]::Pow(1.0 - ($t - $v.FadeAt) / $fadeTime, 2)
+    $a = $v.FadeFrom
+    [System.Drawing.Color]::FromArgb([int]($a.A + ($to.A - $a.A) * $f), [int]($a.R + ($to.R - $a.R) * $f), [int]($a.G + ($to.G - $a.G) * $f), [int]($a.B + ($to.B - $a.B) * $f))
+}
+# Call just before a tile's state changes: the fade starts from whatever colour is showing.
+function Set-Fade($v) { $t = $clock.Elapsed.TotalSeconds; $v.FadeFrom = Get-PowerColor $v $t; $v.FadeAt = $t }
+function Test-Fading($v) { $null -ne $v.FadeAt -and ($clock.Elapsed.TotalSeconds - $v.FadeAt) -lt $fadeTime }
 
 function Format-Span([TimeSpan]$s) {
     if ($s.TotalMinutes -lt 1) { '<1m' }
@@ -369,22 +423,40 @@ $form.Add_HandleCreated({
     }
 })
 
-# Everything that only changes with a status or the mouse (background, tiles, logos, names, pills, the hour strips)
-# is drawn once into a picture; each frame (10 a second) then adds the power buttons and the big values on top.
-$static = @{ Key = $null; Bitmap = $null; Dirty = $true }
-# Called whenever the statuses or the hovered button may have changed; the picture is redrawn only if they did.
+# Everything that only changes with a status or the mouse is kept as pictures: the background (drawn once), one per tile
+# (redrawn only when that tile changes) and the header, put together into one picture. Each frame then only adds the
+# power buttons and the big values on top.
+$static = @{ Key = $null; Bitmap = $null; Dirty = $true; Background = $null; Tiles = @{}; TileKeys = @{} }
+function Get-TileKey($v) { "$($v.State)|$($v.Line)|$($v.Update)|$($v.History)|$([bool]$v.Up)|$([bool]$v.StoppedAt)|$([bool]$v.Until)" }
+# Called whenever the statuses or the hovered button may have changed; the pictures are redrawn only if they did, and
+# only the header and the tiles that changed are repainted.
 function Update-StaticKey {
-    $key = (@($view | ForEach-Object { "$($_.State)|$($_.Line)|$($_.Update)|$($_.History)|$([bool]$_.Up)|$([bool]$_.StoppedAt)|$([bool]$_.Until)" }) -join ';') + "|$hover"
-    if ($key -ne $static.Key) { $static.Key = $key; $static.Dirty = $true }
+    $key = (@(foreach ($v in $view) { Get-TileKey $v }) -join ';') + "|$hover"
+    if ($key -eq $static.Key) { return }
+    $static.Key = $key; $static.Dirty = $true
+    if (-not $form.Visible) { return }
+    $form.Invalidate((New-Object System.Drawing.Rectangle(0, 0, $form.ClientSize.Width, [int](($layout.top - 4) * $k))))
+    for ($i = 0; $i -lt $apps.Count; $i++) {
+        if ($static.TileKeys[$i] -eq (Get-TileKey $view[$i])) { continue }
+        $o = Get-TileOrigin $i
+        $form.Invalidate((New-Object System.Drawing.Rectangle([int](($o.X - 2) * $k), [int](($o.Y - 2) * $k), [int](($layout.tileW + 4) * $k), [int](($layout.tileH + 4) * $k))))
+    }
+}
+function Invalidate-Power($i) {
+    if ("$i" -notmatch '^\d+$') { return }
+    $c = Get-PowerCenter ([int]$i)
+    $form.Invalidate((New-Object System.Drawing.Rectangle([int](($c.X - 38) * $k), [int](($c.Y - 38) * $k), [int](76 * $k), [int](76 * $k))))
 }
 function Set-Quality($g) { $g.SmoothingMode = 'AntiAlias'; $g.TextRenderingHint = 'AntiAliasGridFit'; $g.InterpolationMode = 'HighQualityBicubic'; $g.PixelOffsetMode = 'HighQuality' }
-function Draw-Static($g) {
+function Draw-Background($g) {
     $W = $layout.width; $H = $form.ClientSize.Height / $k
     $bg = New-Object System.Drawing.Drawing2D.LinearGradientBrush((New-Object System.Drawing.PointF(0, 0)), (New-Object System.Drawing.PointF(0, $H)), $theme.bgTop, $theme.bgBottom)
     $g.FillRectangle($bg, 0, 0, $W, $H); $bg.Dispose()
     Fill-Glow $g ($W - 60) 10 230 $theme.on 34
     Fill-Glow $g 40 ($H - 20) 220 (Get-Color '#3B82F6') 26
-
+}
+function Draw-Header($g) {
+    $W = $layout.width
     # Header: title, how many are online, Start all / Stop all, one bar segment per program.
     $online = @($view | Where-Object { $_.State -eq 'on' }).Count
     $g.DrawString('Bridge Control', $fonts.title, $brushes.text, 22, 20)
@@ -397,51 +469,77 @@ function Draw-Static($g) {
     $g.DrawString($(if ($allOn) { 'Stop all' } else { 'Start all' }), $fonts.button, $(if ($usable) { $brushes.pillText } else { $brushes.faint }), $startAllRect, $centered)
     $segW = ($W - 44 - 6 * ($apps.Count - 1)) / $apps.Count; $sx = 22
     foreach ($v in $view) { $g.FillPath($(if ($v.State -eq 'off') { $brushes.barOff } else { $brushes[$v.State] }), (New-RoundRect $sx 82 $segW 5 2.5)); $sx += $segW + 6 }
-
-    for ($i = 0; $i -lt $apps.Count; $i++) {
-        $v = $view[$i]; $o = Get-TileOrigin $i; $x = $o.X; $y = $o.Y; $tw = $layout.tileW
-        $off = $v.State -eq 'off'
-        $tile = New-RoundRect $x $y $tw $layout.tileH 18
-        $tb = New-Object System.Drawing.Drawing2D.LinearGradientBrush((New-Object System.Drawing.PointF(0, $y)), (New-Object System.Drawing.PointF(0, ($y + $layout.tileH))), $theme.tileTop, $theme.tileBottom)
-        $g.FillPath($tb, $tile); $tb.Dispose()
-        $g.SetClip($tile); $g.DrawLine($pens.highlight, ($x + 18), ($y + 0.5), ($x + $tw - 18), ($y + 0.5)); $g.ResetClip()
-        $g.DrawPath($(if ($v.State -eq 'on') { $pens.edgeOn } else { $pens.edge }), $tile)
-
-        # Logo with a cyan halo when online, faded when off.
-        $lx = $x + 18; $ly = $y + 18
-        if ($v.State -eq 'on') { Fill-Glow $g ($lx + 28) ($ly + 28) 46 $theme.on 46 }
-        $g.DrawImage($logos[$i], $lx, $ly, $layout.logo, $layout.logo)
-        if ($off) { $g.FillPath($brushes.dim, (New-RoundRect $lx $ly $layout.logo $layout.logo 15)) }
-
-        # Name, status pill, then SERVICE / UPDATE tags.
-        $g.DrawString($apps[$i].name, $fonts.name, $(if ($off) { $brushes.muted } else { $brushes.text }), (New-Object System.Drawing.RectangleF(($x + 17), ($y + 86), ($tw - 30), 24)), $nameFormat)
-        $color = $theme[$v.State]
-        $pw = $g.MeasureString($v.Line, $fonts.pill, 1000, $typo).Width + 26
-        $g.FillPath((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(36, $color))), (New-RoundRect ($x + 18) ($y + 114) $pw 22 11))
-        $g.FillEllipse($brushes[$v.State], ($x + 27), ($y + 122), 6, 6)
-        $g.DrawString($v.Line, $fonts.pill, $(if ($off) { New-Object System.Drawing.SolidBrush((Get-Color '#8EA3C4')) } else { $brushes[$v.State] }), ($x + 37), ($y + 117), $typo)
-        $tx = $x + 24 + $pw
-        foreach ($tag in @($(if ($apps[$i].service) { 'SERVICE' }), $(if ($v.Update) { 'UPDATE' })) | Where-Object { $_ }) {
-            $tagW = $g.MeasureString($tag, $fonts.caption, 1000, $typo).Width + $tag.Length * 0.9 + 18
-            if ($tx + $tagW -gt $x + $tw - 12) { break }
-            $g.DrawPath($(if ($tag -eq 'UPDATE') { $pens.pill } else { $pens.tag }), (New-RoundRect $tx ($y + 114) $tagW 22 11))
-            [void](Draw-Spaced $g $tag $fonts.caption $(if ($tag -eq 'UPDATE') { $brushes.pillText } else { $brushes.muted }) ($tx + 9) ($y + 119) 0.9)
-            $tx += $tagW + 6
-        }
-
-        # The caption over the big value (the value itself changes by the second, so it is drawn each frame).
-        [void](Draw-Spaced $g (Get-Readout $v)[0] $fonts.caption $brushes.faint ($x + 18) ($y + 148) 1.4)
-
-        # The last hour, one bar per 90 s, newest on the right.
-        $bars = $v.History.PadLeft($layout.strip, ' ')
-        $bx = $x + $tw - 18 - $layout.strip * 2.5
-        foreach ($c in $bars.ToCharArray()) {
-            $bar = switch ($c) { '1' { if ($off) { Get-Color '#22D3EE' 70 } else { Get-Color '#22D3EE' 210 } } '2' { Get-Color '#FBBF24' 230 } default { $theme.stripOff } }
-            $g.FillRectangle((New-Object System.Drawing.SolidBrush($bar)), $bx, ($y + 176), 1.6, 12); $bx += 2.5
-        }
-    }
 }
+function Draw-Tile($g, $i) {
+    $v = $view[$i]; $o = Get-TileOrigin $i; $x = $o.X; $y = $o.Y; $tw = $layout.tileW
+    $off = $v.State -eq 'off'
+    $tile = New-RoundRect $x $y $tw $layout.tileH 18
+    $tb = New-Object System.Drawing.Drawing2D.LinearGradientBrush((New-Object System.Drawing.PointF(0, $y)), (New-Object System.Drawing.PointF(0, ($y + $layout.tileH))), $theme.tileTop, $theme.tileBottom)
+    $g.FillPath($tb, $tile); $tb.Dispose()
+    $g.SetClip($tile); $g.DrawLine($pens.highlight, ($x + 18), ($y + 0.5), ($x + $tw - 18), ($y + 0.5)); $g.ResetClip()
+    $g.DrawPath($(if ($v.State -eq 'on') { $pens.edgeOn } else { $pens.edge }), $tile)
 
+    # Logo with a cyan halo when online, faded when off.
+    $lx = $x + 18; $ly = $y + 18
+    if ($v.State -eq 'on') { Fill-Glow $g ($lx + 28) ($ly + 28) 46 $theme.on 46 }
+    $g.DrawImage($logos[$i], $lx, $ly, $layout.logo, $layout.logo)
+    if ($off) { $g.FillPath($brushes.dim, (New-RoundRect $lx $ly $layout.logo $layout.logo 15)) }
+
+    # Name, status pill, then SERVICE / UPDATE tags.
+    $g.DrawString($apps[$i].name, $fonts.name, $(if ($off) { $brushes.muted } else { $brushes.text }), (New-Object System.Drawing.RectangleF(($x + 17), ($y + 86), ($tw - 30), 24)), $nameFormat)
+    $color = $theme[$v.State]
+    $pw = $g.MeasureString($v.Line, $fonts.pill, 1000, $typo).Width + 26
+    $g.FillPath((New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(36, $color))), (New-RoundRect ($x + 18) ($y + 114) $pw 22 11))
+    $g.FillEllipse($brushes[$v.State], ($x + 27), ($y + 122), 6, 6)
+    $g.DrawString($v.Line, $fonts.pill, $(if ($off) { New-Object System.Drawing.SolidBrush((Get-Color '#8EA3C4')) } else { $brushes[$v.State] }), ($x + 37), ($y + 117), $typo)
+    $tx = $x + 24 + $pw
+    foreach ($tag in @($(if ($apps[$i].service) { 'SERVICE' }), $(if ($v.Update) { 'UPDATE' })) | Where-Object { $_ }) {
+        $tagW = $g.MeasureString($tag, $fonts.caption, 1000, $typo).Width + $tag.Length * 0.9 + 18
+        if ($tx + $tagW -gt $x + $tw - 12) { break }
+        $g.DrawPath($(if ($tag -eq 'UPDATE') { $pens.pill } else { $pens.tag }), (New-RoundRect $tx ($y + 114) $tagW 22 11))
+        [void](Draw-Spaced $g $tag $fonts.caption $(if ($tag -eq 'UPDATE') { $brushes.pillText } else { $brushes.muted }) ($tx + 9) ($y + 119) 0.9)
+        $tx += $tagW + 6
+    }
+
+    # The caption over the big value (the value itself changes by the second, so it is drawn each frame).
+    [void](Draw-Spaced $g (Get-Readout $v)[0] $fonts.caption $brushes.faint ($x + 18) ($y + 148) 1.4)
+
+    # The last hour, one bar per 90 s, newest on the right.
+    $bars = $v.History.PadLeft($layout.strip, ' ')
+    $bx = $x + $tw - 18 - $layout.strip * 2.5
+    foreach ($c in $bars.ToCharArray()) {
+        $bar = switch ($c) { '1' { if ($off) { $stripBrushes.onDim } else { $stripBrushes.on } } '2' { $stripBrushes.wait } default { $brushes.stripOff } }
+        $g.FillRectangle($bar, $bx, ($y + 176), 1.6, 12); $bx += 2.5
+    }
+
+}
+# A transparent picture covering part of the window (in layout units), with a Graphics that draws in layout units.
+function New-Canvas([float]$x, [float]$y, [float]$w, [float]$h) {
+    $px = [int][Math]::Floor($x * $k); $py = [int][Math]::Floor($y * $k)
+    $bmp = New-Object System.Drawing.Bitmap(([int][Math]::Ceiling(($x + $w) * $k) - $px), ([int][Math]::Ceiling(($y + $h) * $k) - $py))
+    $g = [System.Drawing.Graphics]::FromImage($bmp); Set-Quality $g
+    $g.Transform = New-Object System.Drawing.Drawing2D.Matrix($k, 0, 0, $k, (-$px), (-$py))
+    @{ Bitmap = $bmp; Graphics = $g; X = $px; Y = $py }
+}
+function Update-StaticPicture {
+    if (-not $static.Background) {
+        $c = New-Canvas 0 0 $layout.width ($form.ClientSize.Height / $k); Draw-Background $c.Graphics; $c.Graphics.Dispose(); $static.Background = $c
+    }
+    for ($i = 0; $i -lt $apps.Count; $i++) {
+        $tk = Get-TileKey $view[$i]
+        if ($static.TileKeys[$i] -eq $tk -and $static.Tiles[$i]) { continue }
+        if ($static.Tiles[$i]) { $static.Tiles[$i].Bitmap.Dispose() }
+        $o = Get-TileOrigin $i
+        $c = New-Canvas ($o.X - 2) ($o.Y - 2) ($layout.tileW + 4) ($layout.tileH + 4); Draw-Tile $c.Graphics $i; $c.Graphics.Dispose()
+        $static.Tiles[$i] = $c; $static.TileKeys[$i] = $tk
+    }
+    if (-not $static.Bitmap) { $static.Bitmap = New-Object System.Drawing.Bitmap($form.ClientSize.Width, $form.ClientSize.Height) }
+    $g = [System.Drawing.Graphics]::FromImage($static.Bitmap)
+    $g.DrawImageUnscaled($static.Background.Bitmap, 0, 0)
+    Set-Quality $g; $g.ScaleTransform($k, $k); Draw-Header $g; $g.ResetTransform()
+    foreach ($p in $static.Tiles.Values) { $g.DrawImageUnscaled($p.Bitmap, $p.X, $p.Y) }
+    $g.Dispose(); $static.Dirty = $false
+}
 # The power symbol: an open ring with a bar through the gap.
 function Draw-PowerGlyph($g, [float]$cx, [float]$cy, [float]$r, $color, [float]$w) {
     $pen = New-Object System.Drawing.Pen($color, $w); $pen.StartCap = 'Round'; $pen.EndCap = 'Round'
@@ -450,16 +548,9 @@ function Draw-PowerGlyph($g, [float]$cx, [float]$cy, [float]$r, $color, [float]$
 }
 
 $form.Add_Paint({
-    $g = $_.Graphics
-    if ($static.Dirty -or -not $static.Bitmap) {
-        if ($static.Bitmap) { $static.Bitmap.Dispose() }
-        $bmp = New-Object System.Drawing.Bitmap($form.ClientSize.Width, $form.ClientSize.Height)
-        $sg = [System.Drawing.Graphics]::FromImage($bmp)
-        Set-Quality $sg; $sg.ScaleTransform($k, $k)
-        Draw-Static $sg
-        $sg.Dispose()
-        $static.Bitmap = $bmp; $static.Dirty = $false
-    }
+    $g = $_.Graphics; $clip = $_.ClipRectangle
+    if ($static.Dirty -or -not $static.Bitmap) { Update-StaticPicture }
+
     $g.DrawImageUnscaled($static.Bitmap, 0, 0)
 
     Set-Quality $g
@@ -469,7 +560,9 @@ $form.Add_Paint({
     $pulse = 0.5 + 0.5 * [Math]::Sin($t * 2 * [Math]::PI / 2.4)
     for ($i = 0; $i -lt $apps.Count; $i++) {
         $v = $view[$i]; $o = Get-TileOrigin $i; $c = Get-PowerCenter $i; $r = $layout.power
-        $color = $theme[$v.State]; $hot = "$hover" -eq "$i"
+        # Skip tiles outside the area being redrawn (most frames only one tile's button changes).
+        if (-not $clip.IntersectsWith((New-Object System.Drawing.Rectangle([int]($o.X * $k), [int]($o.Y * $k), [int]($layout.tileW * $k), [int]($layout.tileH * $k))))) { continue }
+        $color = Get-PowerColor $v $t; $hot = "$hover" -eq "$i"
         switch ($v.State) {
             'on' {
                 Fill-Glow $g $c.X $c.Y 36 $color ([int](45 + 50 * $pulse + $(if ($hot) { 40 } else { 0 })))
@@ -493,8 +586,8 @@ $form.Add_Paint({
             }
             default {
                 if ($hot) { Fill-Glow $g $c.X $c.Y 34 $theme.on 50 }
-                $g.DrawEllipse((New-Object System.Drawing.Pen($(if ($hot) { $theme.on } else { $theme.ringOff }), 2)), ($c.X - $r), ($c.Y - $r), (2 * $r), (2 * $r))
-                Draw-PowerGlyph $g $c.X ($c.Y + 1) 8 $(if ($hot) { $theme.on } else { $theme.glyphOff }) 2.4
+                $g.DrawEllipse((New-Object System.Drawing.Pen($(if ($hot) { $theme.on } else { $color }), 2)), ($c.X - $r), ($c.Y - $r), (2 * $r), (2 * $r))
+                Draw-PowerGlyph $g $c.X ($c.Y + 1) 8 $(if ($hot) { $theme.on } elseif (Test-Fading $v) { $color } else { $theme.glyphOff }) 2.4
             }
         }
         $value = (Get-Readout $v)[1]
@@ -514,12 +607,12 @@ function Get-HitTarget($e) {
 $form.Add_MouseMove({
     $target = Get-HitTarget $_
     if ("$target" -ne "$script:hover") {
-        $script:hover = $target
+        $was = $script:hover; $script:hover = $target
         $form.Cursor = if ($null -ne $target) { [System.Windows.Forms.Cursors]::Hand } else { [System.Windows.Forms.Cursors]::Default }
-        Update-StaticKey; $form.Invalidate()
+        Update-StaticKey; Invalidate-Power $was; Invalidate-Power $target
     }
 })
-$form.Add_MouseLeave({ if ($null -ne $script:hover) { $script:hover = $null; $form.Cursor = [System.Windows.Forms.Cursors]::Default; Update-StaticKey; $form.Invalidate() } })
+$form.Add_MouseLeave({ if ($null -ne $script:hover) { $was = $script:hover; $script:hover = $null; $form.Cursor = [System.Windows.Forms.Cursors]::Default; Update-StaticKey; Invalidate-Power $was } })
 # A button acts when the mouse is pressed and released on it.
 $pressed = $null
 $form.Add_MouseDown({ if ($_.Button -eq 'Left') { $script:pressed = Get-HitTarget $_ } })
@@ -538,16 +631,14 @@ $form.Add_MouseUp({
     # Show the change at once and keep showing it until the program has really changed (a service's own command
     # can take a few seconds), or for 30 s at most.
     foreach ($i in $rowsHit) {
+        Set-Fade $view[$i]
         $view[$i].Line = if ($starting[$i]) { 'Starting' } else { 'Stopping' }
         $view[$i].State = 'wait'; $view[$i].Until = $null
         $view[$i].PendingTarget = if ($starting[$i]) { 'on' } else { 'off' }; $view[$i].PendingUntil = (Get-Date).AddSeconds(30)
     }
-    Update-StaticKey; $form.Refresh()
-    foreach ($i in $rowsHit) {
-        $done = if ($starting[$i]) { Invoke-Start $i } else { Invoke-Stop $i }
-        if ($done -eq $false) { $view[$i].PendingUntil = $null }    # prompt cancelled: nothing will change
-    }
-    Update-Rows
+    Update-StaticKey; $form.Update()     # paint the changed tile now, before the work starts
+    # The work runs in the background; Complete-Jobs updates the tiles when it is done.
+    foreach ($i in $rowsHit) { if ((Request-Change $i $starting[$i]) -eq $false) { $view[$i].PendingUntil = $null } }
 })
 
 # Tray icon: the logo's four dots, each showing one program (green online, amber restarting, grey off; an unused
@@ -627,7 +718,7 @@ function Update-Rows {
     $online = 0; $now = Get-Date
     for ($i = 0; $i -lt $apps.Count; $i++) {
         $app = $apps[$i]; $g = $guard[$i]; $v = $view[$i]
-        $before = $v.State
+        $before = $v.State; $beforeColor = Get-PowerColor $v $clock.Elapsed.TotalSeconds
         $procs = @(Get-AppProcess $app)
         $watched = $app.keepRunning -and -not $app.service -and $g.Wanted
         $v.Until = $null; $v.Total = 0; $v.Up = $null; $v.Update = $false
@@ -659,6 +750,7 @@ function Update-Rows {
                 $v.State = 'wait'; $v.Line = if ($v.PendingTarget -eq 'on') { 'Starting' } else { 'Stopping' }; $v.Until = $null
             } else { $v.PendingUntil = $null }
         }
+        if ($v.State -ne $before) { $v.FadeFrom = $beforeColor; $v.FadeAt = $clock.Elapsed.TotalSeconds }
         if ($v.State -eq 'off' -and $before -ne 'off') { $v.StoppedAt = $now }
         if ($v.State -eq 'on') { $online++ }
     }
@@ -671,7 +763,6 @@ function Update-Rows {
         }
     }
     Update-StaticKey
-    if ($form.Visible) { $form.Invalidate() }
     $tray.Icon = Get-TrayIcon @($view | ForEach-Object { $_.State })
     $tip = "Bridge Control - $online of $($apps.Count) online"
     $tray.Text = $tip.Substring(0, [Math]::Min(63, $tip.Length))
@@ -688,13 +779,22 @@ $signalTimer.Interval = 300
 $signalTimer.Add_Tick({ if ($showSignal.WaitOne(0)) { Show-Panel } })
 $signalTimer.Start()
 
-# Redraws the open panel for the breathing dots and the counting-down / uptime text.
+# Picks up finished Start / Stop work, and redraws the open panel: ~30 frames a second while something moves (a
+# spinner, a countdown, a colour fade), ~10 otherwise for the breathing buttons and the uptimes.
 $animTimer = New-Object System.Windows.Forms.Timer
 $animTimer.Interval = 100
+$animTick = 0
 $animTimer.Add_Tick({
-    if (-not $form.Visible -or $form.WindowState -eq 'Minimized') { return }
-    # Only the power buttons (glow, rings) and the big values move; redraw just those areas.
+    if ($jobs.Count) { Complete-Jobs }
+    if (-not $form.Visible -or $form.WindowState -eq 'Minimized') { $animTimer.Interval = 100; return }
+    $script:animTick++
+    $moving = @(for ($i = 0; $i -lt $apps.Count; $i++) { $view[$i].State -eq 'wait' -or (Test-Fading $view[$i]) })
+    $fast = $jobs.Count -gt 0 -or $moving -contains $true
+    # (Windows timers tick in ~15.6 ms steps: 25 ms comes out at ~31 ms, i.e. ~30 frames a second.)
+    $animTimer.Interval = if ($fast) { 25 } else { 100 }
+    # Only the power buttons and the big values move; redraw just those areas. When fast, calm tiles every 3rd frame.
     for ($i = 0; $i -lt $apps.Count; $i++) {
+        if ($fast -and -not $moving[$i] -and $script:animTick % 3) { continue }
         $o = Get-TileOrigin $i; $c = Get-PowerCenter $i
         $form.Invalidate((New-Object System.Drawing.Rectangle([int](($c.X - 38) * $k), [int](($c.Y - 38) * $k), [int](76 * $k), [int](76 * $k))))
         $form.Invalidate((New-Object System.Drawing.Rectangle([int](($o.X + 12) * $k), [int](($o.Y + 156) * $k), [int](110 * $k), [int](36 * $k))))
@@ -709,6 +809,7 @@ if (-not $Autostart) { Show-Panel }
 [System.Windows.Forms.Application]::Run($context)
 
 $timer.Stop(); $signalTimer.Stop(); $animTimer.Stop()
+$pool.Close()
 $tray.Dispose()
 foreach ($icon in $trayIcons.Values) { [void][BridgeControl.Native]::DestroyIcon($icon.Handle) }
 $mutex.ReleaseMutex()
