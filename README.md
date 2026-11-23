@@ -8,17 +8,15 @@ Some tools (order-checker bridges, mail bridges, bots, local servers…) only wo
 open. Close the window and the program stops. Bridge Control runs them **hidden in the background** instead, and
 gives you one small window to see and control them:
 
-| Program | Status | Shows | |
+| | Program | Status | |
 |---|---|---|---|
-| OrderChecker | 🔵 Online | Uptime 5h 12m | ⏻ |
-| OrderScrapeBridge | 🟠 Restarting | Back in 8s | ⏻ |
-| Order Tracker | ⚪ Stopped | Last ran 3h ago | ⏻ |
+| 🟢 | OrderChecker | Online · up 5h 12m | `Stop` |
+| 🟠 | OrderScrapeBridge | Restarting · back in 8s | `Stop` |
+| ⚪ | Order Tracker | Offline · not running | `Start` |
 
-- Each program gets a **tile** on a deep-blue panel: **its own logo**, its status, how long it has been running (or
-  the countdown while it restarts), a strip showing **the last hour**, and a round **power button**.
-- 🔵 **Cyan** = running. 🟠 **Amber** = being started again (the ring around the power button fills as it counts
-  down). ⚪ **Grey** = stopped.
-- The **power button** starts the program (hidden) when it is stopped, and stops it when it is running.
+- Each program gets a dark card with **its own logo**, a status dot and one button.
+- 🟢 **Green** = running (and for how long). 🟠 **Orange** = being started again. ⚪ **Grey** = not running.
+- **Start** starts the program (hidden). **Stop** closes it.
 - The button at the top says **Start all** (starts every program that isn't running) and turns into **Stop all**
   once every program is online.
 - Bridge Control can start your programs by itself every time you turn on your PC.
@@ -142,8 +140,8 @@ Press **Enter** to close the window. **You're done!** 🎉
 | I want to… | Do this |
 |---|---|
 | Open Bridge Control | Double-click **Bridge Control** on your desktop, or click its icon by the clock. |
-| Start a program | Press its round **power button**. The tile says *Starting*, then *Online* in a second or two. |
-| Stop a program | Press its **power button** again. The tile says *Stopping*, then *Stopped*. |
+| Start a program | Press **Start** next to it. Its dot turns green in a second or two. |
+| Stop a program | Press **Stop** next to it. Its dot turns grey. |
 | Start or stop everything | Press **Start all** at the top. When everything is online it says **Stop all**. |
 | Close the window | Click **✕**. Bridge Control keeps running next to the clock. |
 | Close Bridge Control completely | Right-click its icon by the clock → **Quit Bridge Control**. |
@@ -157,12 +155,12 @@ program, press its **Stop** button.
 Bridge Control lives in the **hidden icons**, the little **`^`** arrow next to the clock. Its icon is the logo's four
 dots, and **each dot is one of your programs**, in the order of your list (left to right, then the next row):
 
-- 🔵 **cyan**: that program is running
-- 🟠 **amber**: it is being started again
+- 🟢 **green**: that program is running
+- 🟠 **orange**: it is being started again
 - ⚪ **grey**: it is not running
 - a faint dot: you have fewer than four programs
 
-With more than four programs, the dots show the mix instead (e.g. three cyan and one grey = about a quarter is off).
+With more than four programs, the dots show the mix instead (e.g. three green and one grey = about a quarter is off).
 
 **Want the icon always visible?** Click the `^` arrow, then drag the icon down onto the taskbar next to the clock.
 
@@ -178,7 +176,7 @@ that window, the program stops. With `"keepRunning": true`, Bridge Control looks
 Control is running:
 
 - **It closed by itself** (an update, a crash, its window was closed): about 10 seconds later Bridge Control starts
-  it again, hidden. Meanwhile its tile is 🟠 amber and says *Restarting* and *Back in 8s*.
+  it again, hidden. Meanwhile its dot is 🟠 orange and says *Restarting · back in 8s*.
 - **It came back in a black window** (a copy Bridge Control didn't start): Bridge Control gives it about 20 seconds to
   finish updating, then closes that window and starts the program again, hidden. Meanwhile it says *Switching to
   hidden*. The program is offline for a second or two while it swaps.
@@ -195,7 +193,7 @@ Every restart is written down in **bridge-control.log** in the Bridge Control fo
 
 Some programs install themselves to run in the background by themselves, as a Windows service or a background task
 that starts with Windows. Bridge Control can't (and shouldn't) start a second copy of those. Add them with a
-`"service"` line instead, and their tile shows their status and the power button asks them to start or stop:
+`"service"` line instead; their card shows their status and the Start / Stop button asks them to start or stop:
 
 ```json
 {
@@ -206,11 +204,12 @@ that starts with Windows. Bridge Control can't (and shouldn't) start a second co
 }
 ```
 
-- The power button runs the program's own `start` / `stop` command (change them with `"start"` / `"stop"` inside
-  `"service"`). These usually need administrator rights, so **Windows asks you to approve it** each time.
+- The button runs the program's own `start` / `stop` command (change them with `"start"` / `"stop"` inside
+  `"service"`). These usually need administrator rights, so **Windows asks you to approve it** each time. The card
+  says *Starting* / *Stopping* until the program has really changed.
 - `"statusFile"` *(optional)* is the program's own status file. If it reports `cloudState`, `paused`,
-  `lastConnectedAt` or `updateAvailable`, the tile shows *Connecting*, *Paused*, the time connected, or an
-  **UPDATE** tag.
+  `lastConnectedAt` or `updateAvailable`, the card shows *Connecting*, *Paused*, how long it has been connected, or
+  *update available*.
 - A `*` in a folder name of `"path"` matches any folder, for programs that install into a new folder with each update.
 - Windows starts and restarts these programs itself, so `startAtLogin` and `keepRunning` don't apply to them.
 
@@ -238,7 +237,7 @@ Tip: paste the whole list into a free website like **jsonlint.com** and it shows
 **A program shows "MISSING" or "file not found"**
 The path is wrong, or the program was moved. Copy its path again (step 3).
 
-**I press the power button but the tile goes back to Stopped**
+**I press Start but the dot goes back to grey**
 The program starts and then closes by itself, usually because it needs a login, a setting or a licence first.
 Run the program once the normal way (double-click its `.exe`) to read its error message, fix that, then try again.
 
