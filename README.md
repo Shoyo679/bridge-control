@@ -152,7 +152,7 @@ program, press its **Stop** button.
 
 ### The icon next to the clock
 
-Bridge Control lives in the **hidden icons**, the little **`^`** arrow next to the clock. Its icon is the logo's four
+Bridge Control lives in the **hidden icons**, the little **`^`** arrow next to the clock. Its icon shows four
 dots, and **each dot is one of your programs**, in the order of your list (left to right, then the next row):
 
 - 🟢 **green**: that program is running
@@ -296,7 +296,7 @@ Your programs are never changed or deleted.
 - The login entry is a normal shortcut in your Startup folder (`Win + R` → `shell:startup`), called
   *Bridge Control (autostart)*. No services, scheduled tasks or registry changes.
 - An optional `"args"` line passes command-line options to a program, e.g. `"args": "--port 8080"`.
-- `icon.ico` (and `logo.png` for this page) is Bridge Control's logo: four status dots. Replace `icon.ico` with your
+- `icon.ico` (and `logo.png` for this page) is Bridge Control's logo: a triangle with a dot at each corner. Replace `icon.ico` with your
   own and run `Install.ps1` again to change the window and shortcut icon.
 - Everything runs as you. Nothing needs administrator rights and nothing connects to the internet.
 
