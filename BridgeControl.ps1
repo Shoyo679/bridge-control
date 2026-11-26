@@ -479,31 +479,13 @@ $form.Add_MouseUp({
 
 # Tray icon: the logo's four dots, each showing one program (green online, amber restarting, grey off; an unused
 # dot is faint). With more than four programs the dots show the share of each state instead. Made once per mix.
-$trayIcons = @{}
+# Tray icon: the logo itself (the triangle in icon.ico), loaded once; it's the same at every size Windows asks for.
+$trayIcon = $null
 function Get-TrayIcon([string[]]$states) {
-    $slots = if ($states.Count -le 4) { @($states) + @('empty') * (4 - $states.Count) }
-             else { $sorted = @($states | Sort-Object { @('on', 'wait', 'off').IndexOf($_) }); @(0..3 | ForEach-Object { $sorted[[int][Math]::Floor($_ * $sorted.Count / 4)] }) }
-    $key = $slots -join ','
-    if (-not $trayIcons.ContainsKey($key)) {
-        $s = [System.Windows.Forms.SystemInformation]::SmallIconSize.Width
-        $bmp = New-Object System.Drawing.Bitmap($s, $s)
-        $g = [System.Drawing.Graphics]::FromImage($bmp)
-        $g.SmoothingMode = 'AntiAlias'; $g.PixelOffsetMode = 'HighQuality'
-        $tile = New-RoundRect ($s * 0.04) ($s * 0.04) ($s * 0.92) ($s * 0.92) ($s * 0.22)
-        $g.FillPath((New-Object System.Drawing.Drawing2D.LinearGradientBrush((New-Object System.Drawing.PointF(0, 0)), (New-Object System.Drawing.PointF(0, $s)), (Get-Color '#20242E'), (Get-Color '#101217'))), $tile)
-        $g.DrawPath((New-Object System.Drawing.Pen((Get-Color '#2E3442'), 1)), $tile)
-        # Dots a little bigger than in the logo, so they read at tray size.
-        $r = $s * 0.14; $gap = $s * 0.31
-        for ($i = 0; $i -lt 4; $i++) {
-            $color = if ($slots[$i] -eq 'empty') { Get-Color '#2A303C' } else { $theme[$slots[$i]] }
-            $cx = $s / 2 + (($i % 2) - 0.5) * $gap; $cy = $s / 2 + ([Math]::Floor($i / 2) - 0.5) * $gap
-            $g.FillEllipse((New-Object System.Drawing.SolidBrush($color)), ($cx - $r), ($cy - $r), (2 * $r), (2 * $r))
-        }
-        $g.Dispose()
-        $trayIcons[$key] = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
-        $bmp.Dispose()
+    if (-not $trayIcon) {
+        $trayIcon = if (Test-Path (Join-Path $PSScriptRoot 'icon.ico')) { New-Object System.Drawing.Icon((Join-Path $PSScriptRoot 'icon.ico')) } else { [System.Drawing.SystemIcons]::Application }
     }
-    $trayIcons[$key]
+    $trayIcon
 }
 
 $quitting = $false
@@ -618,5 +600,4 @@ if (-not $Autostart) { Show-Panel }
 
 $timer.Stop(); $signalTimer.Stop(); $animTimer.Stop()
 $tray.Dispose()
-foreach ($icon in $trayIcons.Values) { [void][BridgeControl.Native]::DestroyIcon($icon.Handle) }
 $mutex.ReleaseMutex()
